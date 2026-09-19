@@ -120,7 +120,7 @@ BALLOON_COLOR = "white"                 # ... colour-blob detector (white/red/or
 # --- Vehicle physics: ONE place. laptop/sim/world.py (Balloon), laptop/control/estimator.py and follow_me.py read it.
 #     Parts-list PLACEHOLDERS until measured on the bench (README section 3b). ---
 PHYS = dict(
-    D=1.1,                # m, envelope diameter (48" latex inflated to ~1.1 m). MEASURE: tape round the equator / pi
+    D=1.00,               # m, envelope diameter. MEASURED 2026-09-19 (build step S4): 100 cm on the dot, 48" latex inflated to the 110 cm wall marks
     T_MAX=0.050 * 9.81,   # N per motor at duty 1.0 (~50 gf). MEASURE: one motor on a kitchen scale at duty 0.3 / 0.4 / 0.5
     REV_EFF=0.6,          # reverse / forward thrust at the same duty (fixed prop + DRV8833 slow decay). MEASURE: same rig, reverse
     ARM_BELOW=0.55,       # m, motor plane below the balloon centre (pendulum arm). MEASURE: tape, balloon hanging

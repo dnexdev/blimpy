@@ -37,3 +37,8 @@ measured by hand: `tools/calib/survey_mat.py` fits it from tag 0's size and writ
 | STBY floating | both drivers' STBY rows had no other wire (Raymond, 2026-09-19 late): a DRV8833 nSLEEP left floating is asleep, which fits "D worked once then died" | jumper every STBY / nSLEEP to the 3.3 V rail |
 | Decision 2026-09-19 late | the DRV8833 is replaced by a second TB6612 driven by a second ESP32-C3 over I2C (slave 0x10 on the IMU bus, 2 signed bytes C, D, 500 ms timeout, four-wire slow decay): `firmware/i2c_motor_slave/` has the slave sketch, the wiring, the main-board patch and the handoff test | frees GPIO 5, 6, 7, 8, 9 on the main board; laptop side unchanged; build guide reorganised into phases H / S / J so the software side builds the balloon, frame and room meanwhile |
 
+## The balloon (2026-09-19, build phase S)
+
+| Date | What | Value | Goes to | Notes |
+|---|---|---|---|---|
+| 2026-09-19 | balloon diameter after inflating (step S4) | **1.00 m** | `laptop/config.py` `PHYS D = 1.00` (drives `R_BALLOON`, `mono.BALLOON_DIAM_M`, the sim) | 100 cm on the dot; smaller than the 1.10 m the code assumed, so the camera's range to the balloon was 10 % long until this change. Net lift, gondola weight: next rows. Scenario suite at D = 1.00: 23 of 24 pass; `follow_eye_only_walk` (no room camera, eye only: a mode this box cannot fly, no eye camera and no altimeter) now grazes the walls at 0.33 m/s (limit 0.15) where it passed at 1.10. Left as is; the room-camera scenarios all pass. |
