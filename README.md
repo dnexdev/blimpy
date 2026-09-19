@@ -162,6 +162,7 @@ $env:YIBU_API_KEY = "sk-..."              # the team key from the organisers' e-
 python tools/omni_test.py                 # offline: 28 checks against tools/omni_mock_server.py (no key, no internet, free)
 python tools/omni_live_test.py            # LIVE: 13 checks on the real relay in ~90 s (spoken commands from wav files, no mic; ~0.35 units)
 python -m laptop.voice.omni --meter       # no cloud: mic level vs the gate; it must say OPEN only while you talk (do this at the venue)
+python -m laptop.voice.omni --calibrate --mic AirPods   # no cloud: 3 x 6 s (room, you, other people) -> the GATE_DB for this room, or "get the mic closer"
 python -m laptop.voice.omni               # live: mic + laptop webcam, prints tool calls, the transcript and what it cost (Ctrl+C)
 python -m laptop.voice.omni_watch --image me.jpg    # one look: {"present","working","phone","activity"}
 python -m laptop.control.ble_gondola --fake --sim   # (or the real gondola over Bluetooth, section 1b)

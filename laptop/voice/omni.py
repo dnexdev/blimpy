@@ -577,7 +577,31 @@ if __name__ == "__main__":
     ap.add_argument("--listen", type=float, default=5.0, help="seconds the gate listens to the room before it opens (sets the noise floor)")
     ap.add_argument("--mic", default=None, help="input device: index or name fragment (AirPods, Headset); python -m sounddevice lists them")
     ap.add_argument("--spk", default=None, help="output device for the voice (Speakers)")
+    ap.add_argument("--calibrate", action="store_true", help="no cloud: 3 x 6 s (room, you, other people) -> the GATE_DB to put in config.OMNI")
     a = ap.parse_args()
+    if a.calibrate:
+        import sounddevice as sd, numpy as np
+        dev = pick_device(a.mic, "input"); print(f"[calibrate] mic: {sd.query_devices(dev, 'input')['name'][:60]}")
+        levels = []
+        s = open_mic(lambda pcm: levels.append(20.0 * math.log10(math.sqrt(float(np.mean(np.frombuffer(pcm, np.int16).astype(np.float32) ** 2))) / 32768.0 + 1e-6)), dev)
+        def phase(what, secs=6):
+            input(f"\n[calibrate] {what}  (press ENTER, then {secs} s)"); levels.clear(); time.sleep(secs)
+            return np.percentile(levels, [20, 50, 90])
+        room = phase("ROOM: everyone quiet, mic where it will be during the demo")
+        me = phase("YOU: talk to Blimpy the way you will on the day (\"Blimpy, follow me. Blimpy, what do you see?\")")
+        them = phase("OTHERS: you stay quiet, let the people around you talk")
+        s.stop(); s.close()
+        floor, my, their = room[0], me[2], them[2]           # floor: 20th percentile of the room; you / them: 90th percentile
+        print(f"\n[calibrate] noise floor {floor:.0f} dBFS   you {my:.0f} dBFS   other people {their:.0f} dBFS   (your margin over them: {my - their:.0f} dB)")
+        if my - their >= 6:
+            db = round((my + their) / 2 - floor)
+            print(f"[calibrate] set GATE_DB={db} in config.OMNI: the gate opens halfway between them and you"
+                  + ("" if db <= 30 else " (a big number is fine: it is relative to this room)"))
+        else:
+            print("[calibrate] the mic hears them nearly as loud as you: no threshold separates you. Put the mic closer to your mouth "
+                  "(wired earbuds, a headset) or use stage mode (m to mute, p before each command). The name gate still stops them "
+                  "commanding Blimpy; what you lose is a little cost while they talk.")
+        sys.exit(0)
     if a.meter:
         import sounddevice as sd
         g = MicGate(warmup_s=a.listen, on_ready=lambda g: print(f"\n[meter] {g.verdict()}"))

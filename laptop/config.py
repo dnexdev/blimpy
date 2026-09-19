@@ -27,7 +27,8 @@ OMNI = dict(
     # than GATE_MIN_DBFS) opens it, it shuts GATE_HANGOVER_MS after the last loud packet. Calibrate at the venue with
     # python -m laptop.voice.omni --meter. GATE=False streams everything (the old behaviour).
     GATE=True,
-    GATE_DB=12.0,            # dB above the noise floor that counts as someone talking (lower = more sensitive)
+    GATE_DB=12.0,            # dB above the noise floor that counts as someone talking (lower = more sensitive).
+                             # python -m laptop.voice.omni --calibrate --mic AirPods  measures room / you / others and says what to put here.
     GATE_MIN_DBFS=-50.0,     # never open below this absolute level (a fan in a silent room)
     GATE_PREROLL_MS=320,     # audio kept from just before the gate opened (the first syllable)
     GATE_HANGOVER_MS=1000,   # audio kept after the last loud packet; must stay > the server VAD's 600 ms of silence
