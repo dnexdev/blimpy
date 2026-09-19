@@ -90,11 +90,17 @@ def main():
             try: cam = Stream(spec, "eyes").wait_first(5)
             except Exception as e: print(f"[pilot] no eyes ({e}); omni runs ears-only")
             frame_fn = (lambda: cam.latest()[0]) if cam else None
+        O = config.OMNI
+        gate = dict(open_db=O["GATE_DB"], min_dbfs=O["GATE_MIN_DBFS"], preroll_ms=O["GATE_PREROLL_MS"], hangover_ms=O["GATE_HANGOVER_MS"]) if O["GATE"] else False
         try:
-            omni = OmniLive(on_intent=omni_intent, frame_fn=frame_fn, fps=config.OMNI["FPS"],
-                            half_duplex=config.OMNI["HALF_DUPLEX"], purpose="pilot").start()
-            print(f"[pilot] OMNI live: {omni.model} ({'eyes (' + spec + ') + ears' if frame_fn else 'ears only'}). Just talk.")
-            if frame_fn: watcher = FocusWatcher(frame_fn, on_report=reports.append, interval=config.OMNI["WATCH_S"])
+            omni = OmniLive(on_intent=omni_intent, frame_fn=frame_fn, fps=O["FPS"], half_duplex=O["HALF_DUPLEX"], purpose="pilot", gate=gate).start()
+            print(f"[pilot] OMNI live: {omni.model} ({'eyes (' + spec + ') + ears' if frame_fn else 'ears only'}); "
+                  f"mic gate {'on (streams only while someone talks)' if gate else 'OFF: 0.77 units per minute'}. Just talk.")
+            if frame_fn: watcher = FocusWatcher(frame_fn, on_report=reports.append, interval=O["WATCH_S"])
+            try:
+                from ..voice.usage_log import relay_balance
+                b = relay_balance(omni.key); print(f"[pilot] key ...{omni.key[-4:]}: {b['spent']:.2f} of {b['limit']} units used ({b['pct']:.1f} %)")
+            except Exception as e: print(f"[pilot] balance unavailable ({e})")
         except Exception as e:
             print(f"[pilot] OMNI unavailable ({e}); " + ("falling back to local push-to-talk (v)" if local_ok else "typed commands only"))
             omni = None
@@ -193,7 +199,7 @@ def main():
             pos = ("rel z=%.2f" % est.p[2] if est.rel else "(%.2f,%.2f,%.2f)" % tuple(est.p)) if est.p else "none"
             if beh.fpv_ok(): pos += " eye %+.0f%s" % (math.degrees(beh.fpv["bearing"]), "" if beh.fpv_r is None else " %.1fm" % beh.fpv_r)
             psi = f"{math.degrees(est.psi):+4.0f}" if est.psi is not None else "n/a"
-            cloud = "" if omni is None else (" OMNI" + ("m" if omni.muted else "") if omni.ok else " omni-DOWN")
+            cloud = "" if omni is None else ((" OMNI" + ("m " if omni.muted else " ") + omni.mic_status()) if omni.ok else " omni-DOWN")
             print(f"[pilot] {'ARM ' if armed else 'safe'} {note:28s} vf={vf:+.2f} vs={vs:+.2f} yr={yr:+.2f} vz={vz:+.2f} | {pos} psi={psi} z:{est.z_src} "
                   f"{'REC' if recording else '   '}{cloud}      ", end="\r", flush=True)
             time.sleep(max(0.0, 1 / G["HZ"] - (time.monotonic() - t)))
@@ -202,7 +208,10 @@ def main():
     finally:
         for _ in range(3): cmd_out.send(make_cmd(0, 0, 0, False), (args.esp, CMD_PORT)); time.sleep(0.02)
         if watcher is not None: watcher.stop()
-        if omni is not None: omni.stop()
+        if omni is not None:
+            omni.stop()
+            print(f"\n[pilot] cloud this session: {omni.cost['audio_in_s']:.0f} s of audio sent"
+                  + (f" of {omni.gate.total_s:.0f} s heard" if omni.gate else "") + f", {omni.cost['audio_out_s']:.0f} s of Blimpy talking, about {omni.units():.2f} units")
         if cam is not None: cam.stop()
         if eye is not None: eye.stop()
         keys.close(); log.close(); print("\n[pilot] disarmed, bye" + (f"   recorded {log.n} rows -> {log.path}" if log else ""))

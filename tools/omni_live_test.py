@@ -180,4 +180,6 @@ check("ledger never stores the key", om.key not in open(ledger, encoding="utf-8"
 
 n_fail = sum(not v for v in results.values())
 print(f"\n{len(results) - n_fail}/{len(results)} checks passed   (transcript: {len(said)} lines, reconnects {om.n_reconnect}, last error {om.last_error})")
+print(f"[live] cloud: audio sent {om.cost['audio_in_s']:.1f} s of {om.gate.total_s:.1f} s fed (gate), heard back {om.cost['audio_out_s']:.1f} s, "
+      f"about {om.units():.2f} units (python tools/omni_report.py --sessions shows the relay's own bill)")
 sys.exit(1 if n_fail else 0)

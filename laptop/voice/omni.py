@@ -16,8 +16,17 @@ Verified live on the relay with the sponsored key: "pcm" in/out, semantic_vad, v
 response.function_call_arguments.done AND response.output_item.done (same call_id), input transcription comes back as
 conversation.item.input_audio_transcription.completed, usage is in response.done (null when a reply was cut off by
 barge-in), and an image is refused until audio has been appended in the session.
+
+WHAT THE RELAY BILLS (read back from its per-call log, GET /api/log/token, 2026-09-19): the audio the CLIENT appends, at
+100 tokens per second of 16 kHz pcm (15.94 s of wav -> 1594 audio_input tokens) x audio ratio 8; text items the client
+creates x 1; output text x 6; output audio x 8 x 3.75 counted from the bytes it forwards (8.96 s of 24 kHz reply ->
+139 tokens, ~15.6 per second); all x model ratio 2 x group ratio 2, in quota of which ~250 000 make one dashboard
+"dollar" (the 200 limit). The growing prompt (context re-reads, 20k prompt_tokens a session) and the images are NOT
+billed. So an open mic costs ~0.77 units per MINUTE whether anyone talks or not (a 74 s pilot session with the mic open
+cost 0.92 units) and Blimpy's own speech ~0.45 units per minute: MicGate below streams only while someone is talking
+(verified live: 6 s of room noise sent nothing, a 5.5 s question was billed as 5.9 s), and the instructions keep replies short.
 """
-import base64, json, os, queue, re, sys, threading, time, uuid
+import base64, json, math, os, queue, re, sys, threading, time, uuid
 from collections import deque
 
 MODEL = os.environ.get("OMNI_MODEL", "qwen3.5-omni-plus-realtime")
@@ -26,6 +35,65 @@ API_KEY = os.environ.get("OMNI_API_KEY") or os.environ.get("YIBU_API_KEY")
 IN_RATE, OUT_RATE = 16000, 24000          # Qwen-Omni-Realtime: pcm16 mono in at 16 kHz, out at 24 kHz
 MIC_BLOCK = 640                           # samples per mic packet = 40 ms
 JPEG_MAX_SIDE, JPEG_QUALITY, JPEG_MAX_B = 640, 70, 250_000   # provider limit: 256 KB base64 per image, 1 fps recommended
+
+# The relay's tariff (see the header). relay_units() turns what this client sent / received into dashboard units.
+RELAY = dict(audio_in_tok_per_s=100, audio_out_tok_per_s=48000 / 3072, audio_in=8, text_in=1, text_out=6, audio_out=30,
+             model=2, group=2, unit_quota=250_000)
+GATE = dict(open_db=12.0, min_dbfs=-50.0, preroll_ms=320, hangover_ms=1000)   # config.OMNI GATE_* override these in the pilot
+
+
+def relay_units(audio_in_s=0.0, audio_out_s=0.0, text_in=0, text_out=0):
+    """Dashboard units for what a client sent (16 kHz audio seconds, text tokens) and got back (24 kHz audio seconds, text)."""
+    q = (audio_in_s * RELAY["audio_in_tok_per_s"] * RELAY["audio_in"] + audio_out_s * RELAY["audio_out_tok_per_s"] * RELAY["audio_out"]
+         + text_in * RELAY["text_in"] + text_out * RELAY["text_out"]) * RELAY["model"] * RELAY["group"]
+    return q / RELAY["unit_quota"]
+
+
+class MicGate:
+    """Stream the mic only while someone is talking. Energy gate on 40 ms packets: a packet louder than the tracked noise
+    floor + open_db (and louder than min_dbfs) opens it and releases the pre-roll ring (the first syllable); it closes
+    hangover_ms after the last loud packet, longer than the server VAD's silence window so the turn still ends on the
+    server. The floor follows the quietest recent packet (instant down, 3 dB/s up), so a hall that gets louder is
+    tracked and a close-talk mic still wins. Not a wake word: anything loud enough goes up. process(pcm) -> packets to
+    send; level / floor / open are for the meter (python -m laptop.voice.omni --meter)."""
+
+    def __init__(self, open_db=None, min_dbfs=None, preroll_ms=None, hangover_ms=None, rate=IN_RATE, warmup_s=0.5, rise_db_s=3.0):
+        self.open_db = GATE["open_db"] if open_db is None else open_db
+        self.min_dbfs = GATE["min_dbfs"] if min_dbfs is None else min_dbfs
+        self.preroll_s = (GATE["preroll_ms"] if preroll_ms is None else preroll_ms) / 1000.0
+        self.hangover = (GATE["hangover_ms"] if hangover_ms is None else hangover_ms) / 1000.0
+        self.rate, self.warmup_s, self.rise = rate, warmup_s, rise_db_s
+        self.floor = None; self.level = -100.0; self.open = False; self.t0 = None; self.t_loud = 0.0
+        self.pre = deque(); self.pre_s = 0.0
+        self.total_s = 0.0; self.sent_s = 0.0; self.opens = 0
+
+    @property
+    def threshold(self): return max((self.floor if self.floor is not None else -100.0) + self.open_db, self.min_dbfs)
+
+    def process(self, pcm, now=None):
+        import numpy as np
+        now = time.monotonic() if now is None else now
+        a = np.frombuffer(pcm, np.int16).astype(np.float32)
+        secs = len(a) / self.rate; self.total_s += secs
+        self.level = db = 20.0 * math.log10(math.sqrt(float(np.mean(a * a))) / 32768.0 + 1e-6)   # dBFS, floor -120
+        if self.t0 is None: self.t0 = now
+        self.floor = db if self.floor is None else min(db, self.floor + self.rise * secs)
+        loud = db > self.threshold and now - self.t0 >= self.warmup_s
+        if loud: self.t_loud = now
+        out = []
+        if self.open:
+            out.append(pcm)
+            if now - self.t_loud > self.hangover: self.open = False
+        elif loud:
+            self.open = True; self.opens += 1
+            out.extend(self.pre); out.append(pcm)
+            self.pre.clear(); self.pre_s = 0.0
+        else:
+            self.pre.append(pcm); self.pre_s += secs
+            while self.pre_s > self.preroll_s and len(self.pre) > 1:
+                self.pre_s -= len(self.pre.popleft()) / 2 / self.rate
+        self.sent_s += sum(len(p) for p in out) / 2 / self.rate
+        return out
 
 # Same intents as laptop/voice/intent.py (behaviors.py consumes exactly these). The model speaks its own confirmation,
 # so there is no "reply" field: the tool result we return tells it what actually happened.
@@ -161,8 +229,10 @@ class OmniLive:
 
     def __init__(self, on_intent, frame_fn=None, api_key=None, model=None, url=None, session=None, fps=1.0,
                  mic=True, speaker=True, mic_device=None, spk_device=None, half_duplex=True, purpose="demo",
-                 usage_log=True, debug=False, on_text=None):
+                 usage_log=True, debug=False, on_text=None, gate=True):
         self.on_intent, self.frame_fn, self.fps = on_intent, frame_fn, fps
+        self.gate = gate if isinstance(gate, MicGate) else (MicGate(**gate) if isinstance(gate, dict) else (MicGate() if gate else None))
+        self.cost = {"audio_in_s": 0.0, "audio_out_s": 0.0, "text_in": 0, "text_out": 0}   # what the relay charges for, this session
         self.key = api_key or API_KEY
         self.model, self.url = model or MODEL, url or URL
         self.session = dict(SESSION, **(session or {}))
@@ -180,6 +250,11 @@ class OmniLive:
         self.t_speech_stopped = 0.0; self.t_first_audio = 0.0     # per response: VAD end of the user's turn -> first reply audio
         self._resp_active = False; self._after_done = []           # response.create is refused while a response runs: queue it
         self.transcript = []                # (who, text) for the demo log
+        self._t_frame = 0.0
+
+    def units(self):
+        """Estimated dashboard units this session has cost so far (the relay's tariff, see RELAY)."""
+        return relay_units(**self.cost)
 
     # ------------------------------------------------------------------ lifecycle
     def start(self, timeout=10.0):
@@ -254,7 +329,8 @@ class OmniLive:
                 self.ready.set(); self.n_reconnect = 0
         elif t == "response.audio.delta":
             if not self.t_first_audio: self.t_first_audio = time.monotonic()
-            if self.spk: self.spk.write(base64.b64decode(ev.get("delta", "")))
+            pcm = base64.b64decode(ev.get("delta", "")); self.stats["audio_out"] += len(pcm); self.cost["audio_out_s"] += len(pcm) / 2 / OUT_RATE
+            if self.spk: self.spk.write(pcm)
         elif t == "input_audio_buffer.speech_started":
             if self.spk: self.spk.flush()                 # barge-in: user talks over Blimpy
         elif t == "input_audio_buffer.speech_stopped":
@@ -285,6 +361,8 @@ class OmniLive:
         elif t == "response.done":
             self.stats["responses"] += 1; self._resp_active = False
             r = ev.get("response") or {}
+            od = ((r.get("usage") or {}).get("output_tokens_details") or (r.get("usage") or {}).get("output_token_details") or {})
+            self.cost["text_out"] += od.get("text_tokens", 0) or 0
             if self.usage_log:
                 from . import usage_log
                 usage_log.record(self.model, self.key, self.purpose, f"{self.url}?model={self.model}", "websocket",
@@ -330,11 +408,18 @@ class OmniLive:
 
     # ------------------------------------------------------------------ inputs
     def feed_audio(self, pcm16_bytes):
-        """Push 16 kHz mono int16 PCM (tests, or a custom capture)."""
+        """Push 16 kHz mono int16 PCM (the mic callback, tests, or a custom capture). With a gate, silence stays here."""
         if self.muted or not self.ok: return
         if self.half_duplex and self.spk and self.spk.busy(): return
-        if self.send({"type": "input_audio_buffer.append", "audio": base64.b64encode(pcm16_bytes).decode()}):
-            self.stats["audio_in"] += len(pcm16_bytes); self._audio_since_commit += 1
+        if self.gate:
+            was = self.gate.open
+            packets = self.gate.process(pcm16_bytes)
+            if self.gate.open and not was: self._t_frame = 0.0      # a frame with the first words, not a second later
+        else:
+            packets = [pcm16_bytes]
+        for p in packets:
+            if self.send({"type": "input_audio_buffer.append", "audio": base64.b64encode(p).decode()}):
+                self.stats["audio_in"] += len(p); self._audio_since_commit += 1; self.cost["audio_in_s"] += len(p) / 2 / IN_RATE
 
     def _start_mic(self):
         import sounddevice as sd
@@ -345,18 +430,19 @@ class OmniLive:
     def send_frame(self, frame):
         # Verified live: the relay refuses an image until audio has been appended to the CURRENT input buffer ("Error
         # append image before append audio"; a commit opens a fresh buffer), so frames wait for the next mic packet.
-        if frame is None or not self.ok or self._audio_since_commit == 0: return False
+        # With a gate, frames only go while someone is talking: that is the only moment the model looks at them.
+        if frame is None or not self.ok or self._audio_since_commit == 0 or (self.gate and not self.gate.open): return False
         if self.send({"type": "input_image_buffer.append", "image": encode_jpeg(frame)}):
-            self.stats["img_out"] += 1; return True
+            self.stats["img_out"] += 1; self._t_frame = time.monotonic(); return True
         return False
 
     def _frame_loop(self):
         period = 1.0 / max(0.1, self.fps)
         while not self.stopping:
-            t0 = time.monotonic()
-            try: self.send_frame(self.frame_fn())
-            except Exception as e: self.last_error = f"frame: {e}"
-            time.sleep(max(0.0, period - (time.monotonic() - t0)))
+            if time.monotonic() - self._t_frame >= period:
+                try: self.send_frame(self.frame_fn())
+                except Exception as e: self.last_error = f"frame: {e}"
+            time.sleep(0.05)
 
     def say(self, text):
         """Proactive speech (timers, focus nags, arrival): the model says it in its own words. Falls through to False
@@ -365,7 +451,7 @@ class OmniLive:
         ok = self.send({"type": "conversation.item.create",
                         "item": {"type": "message", "role": "user",
                                  "content": [{"type": "input_text", "text": f"[EVENT] Tell the user, in your own words: {text}"}]}})
-        if ok: self._respond()
+        if ok: self._respond(); self.cost["text_in"] += 12 + len(text) // 4
         return ok
 
     def text(self, text):
@@ -373,8 +459,15 @@ class OmniLive:
         if not self.ok: return False
         ok = self.send({"type": "conversation.item.create",
                          "item": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]}})
-        if ok: self._respond()
+        if ok: self._respond(); self.cost["text_in"] += len(text) // 4
         return ok
+
+    def mic_status(self):
+        """One short string for a status line: what the mic sent vs heard, gate state and level, estimated units."""
+        g = self.gate
+        if g is None: return f"mic {self.stats['audio_in'] / 32000:.0f}s ~{self.units():.2f}u"
+        return (f"mic {g.sent_s:.0f}/{g.total_s:.0f}s {'OPEN' if g.open else 'shut'} {g.level:.0f}dB>{g.threshold:.0f} "
+                f"~{self.units():.2f}u")
 
 
 if __name__ == "__main__":
@@ -384,14 +477,29 @@ if __name__ == "__main__":
     ap.add_argument("--no-cam", action="store_true"); ap.add_argument("--text", default=None)
     ap.add_argument("--seconds", type=float, default=120); ap.add_argument("--debug", action="store_true")
     ap.add_argument("--full-duplex", action="store_true", help="headphones: keep the mic open while Blimpy talks (barge-in)")
+    ap.add_argument("--no-gate", action="store_true", help="stream the mic continuously (costs ~0.77 units per minute)")
+    ap.add_argument("--meter", action="store_true", help="no cloud: show the mic level, the noise floor and when the gate would open")
     a = ap.parse_args()
+    if a.meter:
+        import sounddevice as sd
+        g = MicGate()
+        with sd.RawInputStream(samplerate=IN_RATE, channels=1, dtype="int16", blocksize=MIC_BLOCK,
+                               callback=lambda d, f, t, s: g.process(bytes(d))):
+            print("[meter] talk normally, then stay quiet; the gate should be OPEN only while you talk (Ctrl+C to quit)")
+            try:
+                while True:
+                    time.sleep(0.1); bar = "#" * max(0, int((g.level + 60) / 2))
+                    print(f"[meter] {g.level:6.1f} dBFS floor {g.floor if g.floor is not None else -100:6.1f} opens at {g.threshold:6.1f}  "
+                          f"{'OPEN ' if g.open else 'shut '} sent {g.sent_s:5.1f}/{g.total_s:5.1f}s {bar:30s}", end="\r", flush=True)
+            except KeyboardInterrupt: print()
+        sys.exit(0)
     cam = None
     if not a.no_cam and a.cam != "none":
         from ..vision.streams import Stream
         cam = Stream(a.cam, "eyes").wait_first()
     om = OmniLive(on_intent=lambda d: (print(f"\n[omni] TOOL set_intent {d}"), "ok, doing that")[1],
                   frame_fn=(lambda: cam.latest()[0]) if cam else None, mic=a.text is None, debug=a.debug,
-                  half_duplex=not a.full_duplex, purpose="omni_cli")
+                  half_duplex=not a.full_duplex, purpose="omni_cli", gate=not a.no_gate)
     print(f"[omni] connecting to {om.url} model {om.model} key {om.key[-4:] if om.key else None}")
     om.start()
     print("[omni] session up. talk to Blimpy (Ctrl+C to quit)")
@@ -400,10 +508,11 @@ if __name__ == "__main__":
         t0 = time.monotonic()
         while time.monotonic() - t0 < a.seconds:
             time.sleep(1); s = om.stats
-            print(f"[omni] audio in {s['audio_in'] / 32000:5.1f}s  frames {s['img_out']:3d}  calls {s['calls']}  responses {s['responses']}  "
-                  f"{'UP ' if om.ok else 'DOWN'} {om.last_error or ''}", end="\r")
+            print(f"[omni] {om.mic_status()}  frames {s['img_out']:3d}  calls {s['calls']}  responses {s['responses']}  "
+                  f"{'UP ' if om.ok else 'DOWN'} {om.last_error or ''}      ", end="\r")
     except KeyboardInterrupt:
         pass
     om.stop()
     if cam: cam.stop()
-    print("\n[omni] transcript:"); [print(f"  {w}: {t}") for w, t in om.transcript]
+    print(f"\n[omni] this session: {om.cost['audio_in_s']:.1f} s of audio sent, {om.cost['audio_out_s']:.1f} s heard back, about {om.units():.2f} dashboard units")
+    print("[omni] transcript:"); [print(f"  {w}: {t}") for w, t in om.transcript]

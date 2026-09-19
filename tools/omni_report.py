@@ -2,6 +2,8 @@
 
   python tools/omni_report.py                       # ledger data/omni_usage.jsonl -> data/omni_report/
   python tools/omni_report.py --email you@x.com --extra-log other.jsonl
+  python tools/omni_report.py --balance             # what the key has spent of its limit, and when the relay cuts it off
+  python tools/omni_report.py --sessions            # the relay's own bill per session: seconds of audio sent -> units
 
 Runs the organisers' summarize_usage.py (tools/yibu/, unmodified) over the ledger, writes usage_summary.json and
 usage_by_model_key_purpose.csv, and prints the e-mail text with team, project link, period, key suffixes and gaps.
@@ -10,7 +12,7 @@ Nothing here contains the key: the ledger and the summaries carry the last four 
 import argparse, json, os, pathlib, subprocess, sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); os.chdir(ROOT)
-from laptop.voice.usage_log import DEFAULT_PATH
+from laptop.voice.usage_log import DEFAULT_PATH, relay_balance, relay_sessions
 
 TEAM = "Raymond Zheng, Peter Rong, Clement Chung, David Wang"
 PROJECT = "https://github.com/dnexdev/blimpy"
@@ -20,21 +22,24 @@ ap.add_argument("--log", default=DEFAULT_PATH); ap.add_argument("--out", default
 ap.add_argument("--email", default="<application e-mail>")
 ap.add_argument("--extra-log", action="append", default=[], help="other ledgers to merge (e.g. the organisers' examples' artifacts/yibu_api_calls.jsonl)")
 ap.add_argument("--balance", action="store_true", help="ask the relay what the key has spent and when it expires (needs YIBU_API_KEY), then exit")
+ap.add_argument("--sessions", action="store_true", help="the relay's per-session bill (audio seconds, units), then exit")
 a = ap.parse_args()
 
-if a.balance:
-    import datetime, requests, zoneinfo
+if a.balance or a.sessions:
+    import datetime, zoneinfo
     key = os.environ.get("YIBU_API_KEY") or os.environ.get("OMNI_API_KEY") or sys.exit("set YIBU_API_KEY")
-    H = {"Authorization": "Bearer " + key}
-    sub = requests.get("https://yibuapi.com/v1/dashboard/billing/subscription", headers=H, timeout=20).json()
-    today = datetime.date.today()
-    use = requests.get(f"https://yibuapi.com/v1/dashboard/billing/usage?start_date={today - datetime.timedelta(days=7)}&end_date={today + datetime.timedelta(days=1)}",
-                       headers=H, timeout=20).json()
-    spent, limit = use.get("total_usage", 0) / 100.0, sub.get("hard_limit_usd")
-    until = sub.get("access_until")
     et = zoneinfo.ZoneInfo("America/Toronto")
-    print(f"key ...{key[-4:]}: spent {spent:.2f} of {limit} (relay units, {100 * spent / limit if limit else 0:.1f} %) in the last 7 days; "
-          f"access until {datetime.datetime.fromtimestamp(until, et).strftime('%Y-%m-%d %H:%M %Z') if until else '?'}")
+    if a.sessions:
+        rows = relay_sessions(key)
+        print(f"{'when (Toronto)':16} {'model':28} {'units':>6} {'audio in':>8} {'audio out':>9} {'text in':>7} {'text out':>8} {'session':>7}")
+        for r in rows:
+            print(f"{datetime.datetime.fromtimestamp(r['t'], et).strftime('%m-%d %H:%M:%S'):16} {r['model']:28} {r['units']:6.3f} {r['audio_in_s']:7.1f}s "
+                  f"{r['audio_out']:8d}t {r['text_in']:6d}t {r['text_out']:7d}t {r['use_s']:6d}s")
+        print(f"{len(rows)} rows, {sum(r['units'] for r in rows):.2f} units; the realtime model bills the audio you SEND (0.77 units per minute), "
+              f"not the prompt")
+    b = relay_balance(key)
+    print(f"key ...{key[-4:]}: spent {b['spent']:.2f} of {b['limit']} ({b['pct']:.1f} %); "
+          f"access until {datetime.datetime.fromtimestamp(b['until'], et).strftime('%Y-%m-%d %H:%M %Z') if b['until'] else '?'}")
     sys.exit(0)
 
 rows = []

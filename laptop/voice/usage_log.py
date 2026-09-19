@@ -31,6 +31,41 @@ def record(model, key, purpose, endpoint, transport, ok, latency_ms=None, usage=
             status_code=status_code, error=error, call_id=call_id, audit_log=path or DEFAULT_PATH)
 
 
+RELAY_HTTP = os.environ.get("OMNI_HTTP", "https://yibuapi.com/v1").rsplit("/v1", 1)[0]
+
+
+def relay_balance(key, timeout=15):
+    """What the relay's dashboard says about this key: {"spent", "limit", "pct", "until" (epoch or None)}. Free (no
+    model call). spent/limit are the dashboard's own units (the 200 limit): total_usage cents / 100."""
+    import datetime, requests
+    H = {"Authorization": "Bearer " + key}
+    sub = requests.get(f"{RELAY_HTTP}/v1/dashboard/billing/subscription", headers=H, timeout=timeout).json()
+    today = datetime.date.today()
+    use = requests.get(f"{RELAY_HTTP}/v1/dashboard/billing/usage?start_date={today - datetime.timedelta(days=30)}"
+                       f"&end_date={today + datetime.timedelta(days=1)}", headers=H, timeout=timeout).json()
+    spent, limit = use.get("total_usage", 0) / 100.0, sub.get("hard_limit_usd") or 0
+    return {"spent": spent, "limit": limit, "pct": 100.0 * spent / limit if limit else 0.0, "until": sub.get("access_until")}
+
+
+def relay_sessions(key, timeout=15):
+    """The relay's own per-call log for this key (one row per realtime SESSION, one per HTTP call), oldest first:
+    [{"t": epoch, "model", "quota", "units", "audio_in_s", "audio_out", "text_in", "text_out", "prompt", "completion", "use_s"}].
+    units = quota / 250 000 (the dashboard's unit; ~0.5 % off the dashboard total, good enough to see what a session cost)."""
+    import requests
+    r = requests.get(f"{RELAY_HTTP}/api/log/token?key={key}&page_size=500", headers={"Authorization": "Bearer " + key}, timeout=timeout)
+    d = r.json().get("data") or []
+    rows = d if isinstance(d, list) else (d.get("items") or d.get("data") or [])
+    out = []
+    for x in sorted(rows, key=lambda x: x.get("created_at", 0)):
+        try: o = json.loads(x.get("other") or "{}")
+        except ValueError: o = {}
+        out.append({"t": x.get("created_at"), "model": x.get("model_name"), "quota": x.get("quota", 0), "units": x.get("quota", 0) / 250_000.0,
+                    "audio_in_s": o.get("audio_input", 0) / 100.0, "audio_out": o.get("audio_output", 0), "text_in": o.get("text_input", 0),
+                    "text_out": o.get("text_output", 0), "prompt": x.get("prompt_tokens", 0), "completion": x.get("completion_tokens", 0),
+                    "use_s": x.get("use_time", 0)})
+    return out
+
+
 def summary(path=None):
     """Totals per (model, purpose) for a quick look:  python -m laptop.voice.usage_log"""
     p = path or DEFAULT_PATH

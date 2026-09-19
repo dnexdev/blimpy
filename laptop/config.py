@@ -22,6 +22,15 @@ OMNI = dict(
     WATCH_S=6.0,             # focus watcher: seconds between "what is the user doing" looks (laptop/voice/omni_watch.py)
     HALF_DUPLEX=True,        # laptop speakers + laptop mic (no echo cancellation): mute the mic while Blimpy talks.
                              # False with headphones or a conference speaker -> real barge-in.
+    # The relay bills every second of audio the laptop sends (0.77 units per minute, talking or not; README 1d). The gate
+    # sends the mic only while someone is talking: a packet louder than the room's noise floor + GATE_DB (and louder
+    # than GATE_MIN_DBFS) opens it, it shuts GATE_HANGOVER_MS after the last loud packet. Calibrate at the venue with
+    # python -m laptop.voice.omni --meter. GATE=False streams everything (the old behaviour).
+    GATE=True,
+    GATE_DB=12.0,            # dB above the noise floor that counts as someone talking (lower = more sensitive)
+    GATE_MIN_DBFS=-50.0,     # never open below this absolute level (a fan in a silent room)
+    GATE_PREROLL_MS=320,     # audio kept from just before the gate opened (the first syllable)
+    GATE_HANGOVER_MS=1000,   # audio kept after the last loud packet; must stay > the server VAD's 600 ms of silence
 )
 
 # --- Eye on the balloon (laptop/vision/fpv.py): the Arduino/ESP32 camera on the gondola streams over the hotspot. It is

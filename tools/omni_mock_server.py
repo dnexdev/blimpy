@@ -40,7 +40,7 @@ class Mock:
                     await asyncio.sleep(chunk_ms / 1000)
                 await ws.send(json.dumps({"type": "response.audio_transcript.done", "response_id": rid, "transcript": text}))
                 await ws.send(json.dumps({"type": "response.done", "response": {"id": rid, "status": "completed",
-                                          "usage": {"input_tokens": 300, "output_tokens": 40, "total_tokens": 340}}}))
+                                          "usage": {"input_tokens": 300, "output_tokens": 40, "total_tokens": 340, "output_tokens_details": {"text_tokens": 10, "audio_tokens": 30}}}}))
             except asyncio.CancelledError:
                 await ws.send(json.dumps({"type": "response.done", "response": {"id": rid, "status": "cancelled", "usage": None,
                                           "status_details": {"type": "cancelled", "reason": "turn_detected"}}}))
@@ -61,7 +61,7 @@ class Mock:
                                           "item": {"type": "function_call", "call_id": cid, "name": "set_intent",
                                                    "arguments": json.dumps(item["tool"])}}))
                 await ws.send(json.dumps({"type": "response.done", "response": {"id": rid, "status": "completed",
-                                          "usage": {"input_tokens": 500, "output_tokens": 30, "total_tokens": 530}}}))
+                                          "usage": {"input_tokens": 500, "output_tokens": 30, "total_tokens": 530, "output_tokens_details": {"text_tokens": 8, "audio_tokens": 22}}}}))
             else:
                 await audio_reply(item.get("text", "Okay."), item.get("audio_chunks", 5), item.get("chunk_ms", 100))
 

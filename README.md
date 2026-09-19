@@ -159,19 +159,37 @@ Positioning, control and safety never touch the cloud: no internet = local whisp
 
 ```powershell
 $env:YIBU_API_KEY = "sk-..."              # the team key from the organisers' e-mail (OMNI_API_KEY also works). Never commit it.
-python tools/omni_test.py                 # offline: 18 checks against tools/omni_mock_server.py (no key, no internet)
-python tools/omni_live_test.py            # LIVE: 13 checks on the real relay in ~90 s (spoken commands from wav files, no mic)
-python -m laptop.voice.omni               # live: mic + laptop webcam, prints tool calls and the transcript (Ctrl+C)
+python tools/omni_test.py                 # offline: 28 checks against tools/omni_mock_server.py (no key, no internet, free)
+python tools/omni_live_test.py            # LIVE: 13 checks on the real relay in ~90 s (spoken commands from wav files, no mic; ~0.35 units)
+python -m laptop.voice.omni --meter       # no cloud: mic level vs the gate; it must say OPEN only while you talk (do this at the venue)
+python -m laptop.voice.omni               # live: mic + laptop webcam, prints tool calls, the transcript and what it cost (Ctrl+C)
 python -m laptop.voice.omni_watch --image me.jpg    # one look: {"present","working","phone","activity"}
 python -m laptop.control.ble_gondola --fake --sim   # (or the real gondola over Bluetooth, section 1b)
 python -m laptop.control.pilot            # omni mode is the default once the key is set; --voice local to compare
 python -m laptop.voice.usage_log          # token totals per model/purpose from data/omni_usage.jsonl
 python tools/omni_report.py               # the two files + e-mail text the organisers want back
+python tools/omni_report.py --balance     # spent X of 200, and when the relay cuts the key off
+python tools/omni_report.py --sessions    # the relay's own bill, one row per session: seconds of audio sent -> units
 ```
 The key is a per-user environment variable on this laptop (`setx YIBU_API_KEY ...` was run once); every NEW PowerShell
 window has it. The e-mail says it expires 2026-09-20 08:00 EDT, but the relay itself reports access_until
-2026-09-20 02:51 EDT (`GET /v1/dashboard/billing/subscription`): plan for the EARLIER one. Spend so far:
-`GET /v1/dashboard/billing/usage?start_date=...&end_date=...` (cents) against `hard_limit_usd`; see tools/omni_report.py --balance.
+2026-09-20 02:51 EDT (`GET /v1/dashboard/billing/subscription`): plan for the EARLIER one.
+
+**What the relay bills, and the mic gate.** Read back from the relay's own per-call log on 2026-09-19 (`--sessions`):
+the realtime model is charged for the audio the laptop SENDS, 100 tokens per second x 8 (audio) x 2 (model) x 2 (group)
+= **0.77 units per minute of open mic, talking or not**, plus Blimpy's own speech at about 0.45 units per minute
+(output audio, ~15.6 tokens/s x 30). The growing prompt (context re-reads, 20k prompt tokens a session) and the camera
+frames are NOT billed. The first night's 6.65 units were eleven sessions with an always-open mic (a 74 s pilot session
+cost 0.92). So `config.OMNI["GATE"]` (on) streams the mic only while someone is talking: `MicGate` in omni.py opens when
+a 40 ms packet is `GATE_DB` (12) above the room's noise floor and above `GATE_MIN_DBFS`, sends a 320 ms pre-roll so the
+first syllable is kept, and shuts 1 s after the last loud packet (the server VAD still ends the turn; it needs 600 ms of
+silence). Verified live: 6 s of room noise sent nothing, a 5.5 s question was billed as 5.9 s, the 13-check live suite
+passes through the gate. Frames go up only while the gate is open (that is when the model looks at them). Rule of thumb:
+a 10-minute demo with one minute of commands and two minutes of Blimpy talking is about 1.7 units; the live test ~0.35,
+`omni_sim_test.py` ~0.3, the offline suites 0. The pilot prints the key's balance at start, the session's cost at exit,
+and its status line shows `mic 12/240s OPEN -31dB>-46 ~0.20u` (seconds sent / heard, gate state, level vs threshold,
+units so far). Calibrate at the venue with `--meter`: if the hall opens the gate, raise `GATE_DB` or use a close-talk mic;
+if your voice does not open it, lower `GATE_DB`. `GATE=False` (or `--no-gate` in omni.py) streams everything again.
 
 Knobs: `config.OMNI` (CAMERA = what Blimpy sees, FPS, WATCH_S, HALF_DUPLEX), env `OMNI_MODEL` (default
 `qwen3.5-omni-plus-realtime`), `OMNI_URL`, `OMNI_VOICE` (default `Tina`), `OMNI_AUDIO_FMT` (default `pcm`).
@@ -260,11 +278,12 @@ still the laptop webcam (the simulated eye only feeds the follow law), so "what 
 
 ## 1g. Background noise (to do, after the software rehearsal)
 
-The cloud mic is always open; a hackathon hall will talk to Blimpy all day. In order of payoff:
+A hackathon hall will talk to Blimpy all day. In order of payoff:
 1. **A close-talk mic on the speaker** (headset or lapel mic, or the phone as a mic): 20 dB more voice than room. Cheapest
    and the biggest win; `sounddevice` takes any input device (`OmniLive(mic_device=...)`).
-2. **Level gate** in `feed_audio`: only stream packets whose RMS is above a threshold set from the close mic (background
-   talkers never reach it). One knob, no model.
+2. **Level gate** in `feed_audio`: DONE (`MicGate`, section 1d; it is also what keeps the bill down). Only packets above
+   the room's noise floor + `GATE_DB` go up, so background talkers at hall level never reach the cloud; tune with
+   `python -m laptop.voice.omni --meter`.
 3. **Name gate**: the instructions already say only speech addressed to Blimpy counts; the transcript comes back with each
    turn, so a turn whose transcript has no "Blimpy" (or "Blippi") can be ignored for tool calls.
 4. **Push-to-talk** as the safety net: `m` mutes the cloud mic in the pilot today; a foot pedal or a key held while

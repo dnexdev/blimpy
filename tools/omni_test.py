@@ -6,7 +6,8 @@ Checks: session.update carries the set_intent tool; frames are held back until t
 them before audio), then mic packets and frames reach the server; a tool call reaches
 on_intent and its result goes back as function_call_output + response.create; the reply audio reaches the speaker;
 say() injects an [EVENT] turn; barge-in flushes playback; half-duplex drops mic packets while Blimpy talks; usage rows
-land in the ledger; the client reconnects after the server drops it; a spoken "stop" hovers from the transcription alone.
+land in the ledger; the client reconnects after the server drops it; a spoken "stop" hovers from the transcription alone;
+the mic gate keeps silence off the wire (the relay bills every second sent) and frames only go while someone talks.
 """
 import json, os, pathlib, sys, tempfile, time
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -53,7 +54,7 @@ intents = []
 spk = FakeSpeaker()
 frame = np.zeros((720, 1280, 3), np.uint8); frame[100:600, 200:900] = (200, 30, 200)
 om = omni.OmniLive(on_intent=lambda d: (intents.append(d), "turning right")[1], frame_fn=lambda: frame,
-                   api_key="test-key-1234", url=f"ws://127.0.0.1:{PORT}/v1/realtime", fps=4.0,
+                   api_key="test-key-1234", url=f"ws://127.0.0.1:{PORT}/v1/realtime", fps=4.0, gate=False,   # gate tested in 10.
                    mic=False, speaker=spk, usage_log=ledger, purpose="omni_test", on_text=lambda w, t: None)
 t0 = time.monotonic(); om.start(timeout=5); t_conn = time.monotonic() - t0
 print(f"[test] session up in {t_conn:.2f}s")
@@ -128,7 +129,53 @@ check("spoken stop -> hover from the transcription (model said only Mm-hm.)",
       wait_for(lambda: len(intents) > n_int, 3) and intents[-1] == {"intent": "hover"} and om.stats.get("local_stops") == 1,
       f"{intents[n_int:]} heard {om.transcript[-2:]} sessions {mock.stats['sessions']} appends {mock.stats['audio_appends']} ok={om.ok} err={om.last_error}")
 
-om.stop(); stop()
+check("cost estimate follows the relay's tariff", abs(om.units() - omni.relay_units(**om.cost)) < 1e-9 and om.cost["audio_out_s"] > 1
+      and om.cost["audio_in_s"] > 3 and abs(omni.relay_units(audio_in_s=60) - 0.768) < 0.001 and abs(omni.relay_units(audio_out_s=60) - 0.45) < 0.001,
+      f"{ {k: round(v, 2) for k, v in om.cost.items()} } -> {om.units():.3f} units; a minute of mic = {omni.relay_units(audio_in_s=60):.3f}, "
+      f"a minute of Blimpy talking = {omni.relay_units(audio_out_s=60):.3f}")
+om.stop()
+
+# 10. the mic gate: silence never leaves the laptop, speech goes up with a pre-roll and a hangover, frames only while open
+PK = omni.MIC_BLOCK * 2                                   # one 40 ms packet
+quiet = (np.random.default_rng(1).normal(0, 30, omni.MIC_BLOCK)).astype(np.int16).tobytes()    # ~-60 dBFS room
+loud = (np.sin(np.arange(omni.MIC_BLOCK) * 0.3) * 8000).astype(np.int16).tobytes()             # ~-13 dBFS voice
+g = omni.MicGate(); t = [0.0]
+def step(pcm, n):
+    out = []
+    for _ in range(n): out += g.process(pcm, now=t[0]); t[0] += 0.04
+    return len(out)
+n_quiet = step(quiet, 75)                                 # 3 s of room
+n_talk = step(loud, 25)                                   # 1 s of talking
+n_after = step(quiet, 75)                                 # 3 s of room after: the hangover, then shut
+check("gate: 3 s of room noise sends nothing", n_quiet == 0 and not g.open, f"{n_quiet} packets, floor {g.floor:.0f} dB, opens at {g.threshold:.0f}")
+check("gate: speech goes up with the pre-roll", n_talk == 25 + 8 and g.opens == 1, f"{n_talk} packets for 25 of speech (8 pre-roll)")
+check("gate: shuts 1 s after the last loud packet", 24 <= n_after <= 26 and not g.open, f"{n_after} packets after, open={g.open}")
+g2 = omni.MicGate(); t2 = [0.0]
+def step2(pcm, n):
+    out = 0
+    for _ in range(n): out += len(g2.process(pcm, now=t2[0])); t2[0] += 0.04
+    return out
+step2(quiet, 50); n_fan = step2(loud, 400)                # a fan switched on: 16 s of constant -13 dB
+check("gate: a constant loud noise becomes the floor within ~13 s and the gate shuts", not g2.open and 300 < n_fan < 380 and g2.floor > -16,
+      f"sent {n_fan} of 400 packets, floor now {g2.floor:.0f} dB, opens at {g2.threshold:.0f}")
+
+mock.script.append({"tool": {"intent": "hover"}})
+om2 = omni.OmniLive(on_intent=lambda d: (intents.append(d), "holding")[1], frame_fn=lambda: frame,
+                    api_key="test-key-1234", url=f"ws://127.0.0.1:{PORT}/v1/realtime", fps=4.0, gate=True,
+                    mic=False, speaker=spk, usage_log=ledger, purpose="omni_test", on_text=lambda w, t: None)
+om2.start(timeout=5)
+a0, i0 = mock.stats["audio_appends"], mock.stats["images"]
+for _ in range(50): om2.feed_audio(quiet); time.sleep(0.005)
+time.sleep(0.6)
+check("gated client: 2 s of silence -> no audio, no frames on the wire", mock.stats["audio_appends"] == a0 and mock.stats["images"] == i0 and om2.cost["audio_in_s"] == 0,
+      f"appends +{mock.stats['audio_appends'] - a0}, images +{mock.stats['images'] - i0}")
+for _ in range(40): om2.feed_audio(loud); time.sleep(0.04)
+check("gated client: speech -> audio and a frame within the first words", mock.stats["audio_appends"] - a0 >= 40 and mock.stats["images"] > i0,
+      f"appends +{mock.stats['audio_appends'] - a0}, images +{mock.stats['images'] - i0}, sent {om2.gate.sent_s:.2f} s")
+for _ in range(30): om2.feed_audio(quiet); time.sleep(0.04)     # 1.2 s of room after the words
+check("gated client: hangover closes the gate, cost counts only what was sent", not om2.gate.open and abs(om2.cost["audio_in_s"] - om2.gate.sent_s) < 1e-6
+      and 2.5 < om2.cost["audio_in_s"] < 3.2, f"sent {om2.cost['audio_in_s']:.2f} s of {om2.gate.total_s:.2f} s -> {om2.units():.4f} units; {om2.mic_status()}")
+om2.stop(); stop()
 n_fail = sum(not v for v in results.values())
 print(f"\n{len(results) - n_fail}/{len(results)} checks passed")
 sys.exit(1 if n_fail else 0)
