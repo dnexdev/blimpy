@@ -395,7 +395,10 @@ def main():
                 while not tr.send("STOP") and time.monotonic() - t1 < 15: time.sleep(0.2)   # link dropped mid-run (seen on the bench): wait for the reconnect
                 time.sleep(0.5); print("[ble] STOP" if tr.connected else "[ble] STOP NOT DELIVERED: link is down, cut the motor power")
         else:
-            del got[:]; time.sleep(10.0); print(probe_verdict(got, 10.0))
+            del got[:]; t1 = time.monotonic()
+            try: time.sleep(10.0)
+            except KeyboardInterrupt: pass                      # Ctrl+C early: still print the verdict for what arrived
+            print(probe_verdict(got, max(0.5, time.monotonic() - t1)))
         tr.close(); time.sleep(0.5); return
 
     br = Bridge(tr, http_port=None if args.no_http else B["HTTP_PORT"])
