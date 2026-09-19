@@ -1,7 +1,7 @@
 """Keyboard teleop: sends 20 Hz commands, prints telemetry.
 
   python -m laptop.control.teleop                    # to fake_esp32 on this machine
-  python -m laptop.control.teleop --esp 192.168.137.50
+  python -m laptop.control.teleop                    # real gondola: python -m laptop.control.ble_gondola first (Bluetooth bridge)
 
 Keys:  w/s  forward/back (vf +-0.1)   a/d  yaw CCW/CW (yr +-0.1)   q/e  up/down (vz +-0.1)   j/l  strafe left/right (vs +-0.1)
        x    zero all setpoints        SPACE arm / disarm             k    KILL (disarm + zero)
@@ -15,7 +15,7 @@ from .keys import ESC, KeyPoller
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--esp", default="127.0.0.1", help="ESP32 (or fake_esp32) IP")
+    ap.add_argument("--esp", default="127.0.0.1", help="where commands go: the bridge / fake_esp32 on this machine (127.0.0.1) or a legacy WiFi board")
     ap.add_argument("--hz", type=float, default=20)
     args = ap.parse_args()
     args.esp = resolve(args.esp)

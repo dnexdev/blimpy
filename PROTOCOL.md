@@ -1,18 +1,34 @@
 # Blimpy — PROTOCOL.md
 
-Principle: **reflexes on the vehicle (ESP32-C3), thinking on the laptop.**
-Anything in this file is a contract between the firmware and the laptop code. Change it in both places.
+Principle: **thinking on the laptop; the gondola is a motor box.**
+Sections 2-5, 7 and 8 are the contract between the control programs and `laptop/control/ble_gondola.py`, the
+Bluetooth bridge, which is the only code that talks to the gondola. Section 1b is the gondola's own protocol. The
+legacy WiFi firmware in `firmware/` implements sections 2-3 and 7-9 on the board itself.
 
 ## 1. Links
 
 | Link      | Port | Direction              | Rate      | Payload            |
 |-----------|------|------------------------|-----------|--------------------|
-| command   | 5005 | laptop -> ESP32        | 20 Hz     | one JSON / datagram|
-| telemetry | 5006 | ESP32 -> laptop        | 20 Hz     | one JSON / datagram|
+| command   | 5005 | control -> bridge (or legacy ESP32) | 20 Hz | one JSON / datagram|
+| telemetry | 5006 | bridge (or legacy ESP32) -> control | 20 Hz | one JSON / datagram|
+| gondola   | BLE  | bridge <-> gondola     | <= 20 Hz / IMU rate | text lines (1b) |
 | state     | 5007 | vision or sim -> control (localhost) | ~15 Hz | one JSON / datagram |
 
 All UDP. One JSON object per datagram. No newline needed. Unknown keys are ignored.
 Telemetry is sent to whichever IP most recently sent a command.
+
+## 1b. Gondola over Bluetooth LE (the hardware team's firmware)
+
+Device name `BalloonRobot`, two GATT characteristics (UUIDs in `config.BLE`):
+- **command** (write without response), ASCII: `C 40` / `D -40` / `E 50` / `F 100` (one motor, percent, sign =
+  direction), `ALL 30`, `MOTORS c d e f` (percent for motors C D E F), `STOP`.
+- **telemetry** (notify): one IMU text line per sample. The layout is the firmware's; `config.BLE` `IMU_FIELDS` /
+  `GYRO_UNITS` / `GYRO_SIGN` describe it and `laptop/control/imu_store.py` parses it (key=value, JSON or bare numbers).
+
+The bridge maps our L/R/S/V to the letters (`config.BLE` `MOTORS`, `SIGN`), runs the section 7 mixer at 50 Hz on the
+laptop with the yaw rate from the IMU, writes `MOTORS` at most 20 times a second (or every 250 ms unchanged), and
+turns the IMU into section 3 telemetry: `alt` and `vbat` are -1, plus `imu_age` (ms) and `ble` (0/1). Percent = mixer
+duty x 100, so normal flight stays within +-50. The latest sample is also served on `http://127.0.0.1:5008/imu`.
 
 ## 2. Command (5005)
 
@@ -88,7 +104,7 @@ a fixed prop in reverse gives ~60 % thrust).
 | yr = 1.0   | 1.0 rad/s CCW  | YR_MAX = 1.0 rad/s |
 | vf, vs, vz | motor duty fractions; laptop caps them at 0.3–0.4 | CAP = 0.5 in the mixer |
 
-## 7. Mixer (ESP32, 50 Hz) — identical copy in `laptop/control/protocol.py::mix`
+## 7. Mixer (50 Hz) — `laptop/control/protocol.py::mix`, run by the bridge (legacy WiFi build: `firmware/include/mixer.h` on the board)
 
 ```
 gzNorm = measured_yaw_rate / YR_MAX          (0 if no IMU -> open loop)
@@ -100,7 +116,7 @@ mR_t   = clamp(vf + diff, -CAP, CAP)
 mS_t   = clamp(vs,        -CAP, CAP)
 mV_t   = clamp(vz,        -CAP, CAP)
 each motor moves toward its target by at most SLEW = 0.05 per tick (=> 0 to 0.5 in 0.2 s)
-Each motor = one DRV8833 channel driven as PWM + DIR (IN1 = PWM 25 kHz, IN2 = DIR):
+Legacy WiFi build only. Each motor = one DRV8833 channel driven as PWM + DIR (IN1 = PWM 25 kHz, IN2 = DIR):
   value >= 0: DIR low,  duty = value        (fast decay)
   value <  0: DIR high, duty = 1 - |value|  (slow decay; reverse)
 The ESP32-C3 has only 6 PWM channels, which is why it is PWM+DIR and not two PWMs per motor.
@@ -108,14 +124,18 @@ The ESP32-C3 has only 6 PWM channels, which is why it is PWM+DIR and not two PWM
 
 ## 8. Failsafe / arming
 
-- Motors spin only if `arm == 1` **and** age < 500 ms. Otherwise: all PWM 0, DRV8833 nSLEEP LOW, `armed = 0`.
+- Motors spin only if `arm == 1` **and** age < 500 ms **and** the gondola link is up. Otherwise the bridge sends `STOP`
+  (repeated once a second while disarmed), resets the yaw integrator and reports `armed = 0`. Legacy WiFi build: all
+  PWM 0, DRV8833 nSLEEP LOW.
+- The Bluetooth firmware keeps the last percentages if the bridge process dies. It should add its own STOP after
+  500 ms without a command (asked of the hardware team); until then the bench test in README 3 step 4 is mandatory.
 - Laptop sends `arm:0` three times when a program exits.
-- ESP32 status LED (shares GPIO 8 with nSLEEP, active low): **off = armed**, slow blink (1 Hz) = idle & talking
+- Legacy WiFi build: ESP32 status LED (shares GPIO 8 with nSLEEP, active low): **off = armed**, slow blink (1 Hz) = idle & talking
   to the laptop, fast blink (4 Hz) = no commands for 2 s / no WiFi.
-- Hotspot lost after boot: the ESP32 retries every 5 s and restarts mDNS when back. If the hotspot was never found
+- Legacy WiFi build: hotspot lost after boot: the ESP32 retries every 5 s and restarts mDNS when back. If the hotspot was never found
   at boot it stays on the fallback AP `wisp-gondola` (192.168.4.1) until power-cycled.
 
-## 9. ESP32-C3 SuperMini pin map (verify against the board silkscreen)
+## 9. Legacy WiFi build: ESP32-C3 SuperMini pin map (the Bluetooth gondola's wiring is the hardware team's)
 
 | function | GPIO | DRV8833 pin | note |
 |----------|------|-------------|------|

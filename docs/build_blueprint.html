@@ -73,7 +73,7 @@
       <p class="lede">Everything between the helium and the laptop: the envelope, the gondola, four motors, two driver boards, the ESP32 brain, the battery, and the two cameras that watch the room. Read the drawings, then follow the steps in order.</p>
     </div>
     <dl>
-      <dt>Firmware</dt><dd>4-motor PWM+DIR, PI yaw</dd>
+      <dt>Firmware</dt><dd>Bluetooth motor box (BalloonRobot); mixer on the laptop</dd>
       <dt>Board flashed</dt><dd>wisp-9910</dd>
       <dt>Contract</dt><dd>PROTOCOL.md §6, §9</dd>
       <dt>Units</dt><dd>metres, grams-force</dd>
@@ -229,6 +229,7 @@
   <div class="callout"><strong>Prop direction matters because the props are fixed.</strong> A propeller gives about 60% thrust in reverse. Choose each motor's spin direction so the efficient direction is the one used most: forward for L and R, up for V. S is used both ways; either is fine. The 8520 set comes with clockwise and counter-clockwise props; put a CW and a CCW on L and R so their torques cancel.</div>
 
   <h2>3. Wiring</h2>
+  <div class="callout"><strong>Link changed.</strong> The gondola runs the hardware team's Bluetooth firmware: it advertises as <code>BalloonRobot</code>, takes per-motor percentages (<code>MOTORS c d e f</code>, <code>STOP</code>) and streams IMU lines. The laptop bridge <code>laptop/control/ble_gondola.py</code> runs the mixer and the failsafe. The pin table below is the legacy WiFi build; the motor roles (L and R rear, S sideways, V vertical) and the plan view still apply. Map C/D/E/F to L/R/S/V in <code>config.BLE</code> on the bench (README section 3).</div>
   <p>One ESP32-C3 SuperMini drives two DRV8833 dual H-bridge boards. Each motor uses one bridge channel as PWM plus direction, because the C3 has only six PWM outputs. Both driver boards share one enable line, which is also the onboard LED, so LED lit means motors disabled.</p>
 
   <figure class="sheet">
@@ -404,7 +405,8 @@
     </li>
     <li><strong>Confirm the board is alive on the network</strong>
       <p>Battery off, USB in. Run the serial monitor and watch it join the hotspot and print its IP and name. Then teleop from the laptop:</p>
-      <pre>python -m laptop.control.teleop --esp wisp-9910.local</pre>
+      <pre>python -m laptop.control.ble_gondola   # terminal 1: connects to BalloonRobot
+python -m laptop.control.teleop        # terminal 2</pre>
       <p>LED fast blink turns to slow blink when commands arrive. SPACE arms: LED goes off. Ctrl+C: LED back on within half a second. That is the failsafe, and it already works on this board.</p>
     </li>
     <li><strong>One motor, then all four</strong>

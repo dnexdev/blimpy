@@ -1,20 +1,22 @@
 # Blimpy
 
-A near-silent helium-balloon robot that follows you around. Reflexes live on an ESP32-C3 in the gondola;
-everything clever (vision, control, voice) runs on the laptop. The contract between the two is
+A near-silent helium-balloon robot that follows you around. The gondola is a Bluetooth motor box (the hardware team's
+firmware: per-motor percentages in, IMU lines out); everything clever (mixer, failsafe, vision, control, voice) runs
+on the laptop. `laptop/control/ble_gondola.py` is the bridge to the gondola; everything above it speaks
 [PROTOCOL.md](PROTOCOL.md). **Read that first.**
 
 ```
-firmware/            ESP32-C3 (PlatformIO). Mixer + failsafe + IMU + telemetry.
+firmware/            legacy ESP32-C3 WiFi build (PlatformIO): mixer + failsafe + IMU on the board. Not what flies now (README 3).
 laptop/config.py     one place for sources, IPs, gains, vehicle physics (PHYS); room geometry is loaded from venues/default.json
-laptop/control/      protocol.py (shared mixer) · fake_esp32.py (stand-in + simulator) · teleop.py · follow_me.py · pilot.py · behaviors.py · estimator.py · link.py (telemetry watchdog)
+laptop/control/      ble_gondola.py (Bluetooth bridge to the gondola: mixer + failsafe + telemetry) · imu_store.py (IMU samples for everyone, http :5008)
+                     protocol.py (shared mixer) · fake_esp32.py (stand-in + simulator) · teleop.py · follow_me.py · pilot.py · behaviors.py · estimator.py · link.py (telemetry watchdog)
 laptop/vision/       streams.py · calib_io.py · triangulate.py · detect.py (YOLO) · localize.py · mono.py (1 cam) · preflight.py · train_balloon.py
 laptop/positioning/  schema.py · session.py (record/load) · evaluate.py · sources.py (udp/replay/sim) · fuse.py (stub) · venue.py · record.py · replay.py · capture_place.py
 laptop/sim/          world.py (balloon physics + every sensor model) · plot.py (live top-down view)
 laptop/voice/        stt.py (whisper) · intent.py (local LLM -> JSON intents) · tts.py · omni.py (Qwen3.5-Omni realtime: ears/eyes/mouth, OMNI Live track) · omni_watch.py (focus watcher) · usage_log.py
 tools/calib/         make_targets.py · intrinsics.py · extrinsics.py · triangulate_test.py · record_clips.py
 tools/dataset/       build_balloon_dataset.py · label_site.py · extract_frames.py
-tools/               scenarios.py · sim_test.py · behaviors_test.py · control_test.py · vision_test.py · positioning_test.py · intent_test.py
+tools/               scenarios.py · sim_test.py (--ble) · ble_test.py · behaviors_test.py · control_test.py · vision_test.py · positioning_test.py · intent_test.py
                      webcam_test.py · balloon_eval.py · vision_check.py (go/no-go) · positioning_eval.py (sessions vs truth)
 calib/               <name>_intrinsics.npz (once) and <name>_extrinsics.npz (every placement)
 venues/              default.json: the room (arena, obstacles, places). Committed; config.py exports it as ARENA / OBSTACLES / JUDGES_XY
@@ -28,16 +30,16 @@ python -m venv .venv; .\.venv\Scripts\Activate.ps1
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128   # RTX 5080 needs cu128+
 pip install -r requirements.txt
 ```
-Firmware: PlatformIO CLI comes with `requirements.txt` (no VS Code needed). Copy
-`include/secrets.h.example` to `include/secrets.h`, fill in the laptop hotspot name/password, then:
+Gondola link (Bluetooth LE): the gondola advertises as `BalloonRobot`. Windows Bluetooth on, then:
+```powershell
+python -m laptop.control.ble_gondola      # scan, connect, bridge udp 5005/5006 <-> BLE. Leave it running (Ctrl+C = STOP)
+python -m laptop.control.teleop           # second terminal: SPACE arm, w/s a/d q/e j/l, k = kill. pilot / follow_me the same way
 ```
-cd firmware && pio run                        # compile (first run downloads the toolchain, ~1 GB)
-cd firmware && pio run -t upload -t monitor   # flash + serial monitor, board on USB
-cd firmware && pio test -e native             # mixer / failsafe / command-parse tests on the laptop, no board (~2 s)
-```
-Platform is pinned (`espressif32@7.1.3`, Arduino core 2.0.17) so every laptop builds the same binary.
+`http://127.0.0.1:5008/imu` (latest IMU sample), `/imu/history?n=200`, `/status` while the bridge runs; the same data in
+Python via `laptop.control.imu_store`. Motor letters, signs and the IMU layout are set once on the bench (section 3).
+Legacy WiFi firmware (`firmware/`, PlatformIO, `cd firmware && pio run`) still works: pass `--esp wisp-xxxx.local`.
 
-**Network rule:** everything (laptop, ESP32, phones, Pis) joins the *laptop's hotspot*. Never the hackathon WiFi.
+**Network rule:** phones and Pis join the *laptop's hotspot*, never the hackathon WiFi. The gondola is on Bluetooth.
 
 ## 1. Track B — protocol works with no hardware (5 minutes)
 
@@ -48,6 +50,12 @@ python -m laptop.control.teleop
 ```
 Press SPACE to arm, `w` a few times, watch the fake motors ramp; kill teleop with Ctrl+C and watch the
 fake disarm within 0.5 s. That is the failsafe working.
+
+The same thing through the Bluetooth bridge on its simulated robot: `python -m laptop.control.ble_gondola --fake --sim`
+instead of `fake_esp32` (teleop / follow_me / pilot do not know the difference). `python tools/ble_test.py` (12 s, no
+hardware) checks the bridge itself: udp command -> mixer -> `MOTORS` percentages, IMU lines -> telemetry, the 500 ms
+STOP, the IMU store and its HTTP endpoints, recovery after a link drop. `python tools/sim_test.py --ble` is the control
+regression over the bridge.
 
 Regression test of the whole control stack (failsafe timing + follow-me vs a walking person, ~50 s, no hardware):
 ```powershell
@@ -281,23 +289,26 @@ rpicam-vid -t 0 --width 1280 --height 720 --framerate 30 --codec h264 --inline -
 
 ## 3. Real gondola — bench checklist (in this order)
 
-1. Flash with `HAS_IMU 0`. Serial shows IP + name. `teleop --esp wisp-xxxx.local`: LED fast blink turns to slow blink
-   when commands arrive; SPACE (arm) turns it off.
-2. **DRV8833 STBY to GPIO 8** (firmware drives it HIGH when armed; the onboard LED goes OFF when armed).
-   One motor on Motor L (AIN1 = GPIO 0, AIN2 = GPIO 4, motor on AO1/AO2): arm, `w` -> spins; `s` -> reverses.
-   No spin? Check STBY first, then VM, then GND shared with the ESP32. Full pin table in PROTOCOL.md section 9.
-3. `HAS_IMU 1`, reflash, keep still 2 s at boot. Rotate the gondola CCW by hand: telemetry `yaw` must go UP.
-   If it goes down, flip the IMU (chip Z must point up) or negate `gz` in `imuStep`.
-   Then `HAS_TOF 1`: `teleop` prints `alt`. Hold the gondola over the floor at a tape-measured 0.5 / 1.0 / 1.5 / 1.8 m: within
-   3 cm, and note where it turns to -1. The VL53L0X's default mode ranges ~1.2 m; at cruise the lens is ~1.1 m up, so if it
-   drops out below 1.5 m switch the firmware to long-range mode before `startContinuous`.
-4. All four motors (L/R/S/V) with teleop. Props balanced, foam tape under motors, throttle stays <= 0.5 by construction.
-5. Failsafe: Ctrl+C teleop -> motors stop within 0.5 s, LED starts blinking (slow, then fast after 2 s).
+1. Bluetooth on, gondola powered. `python -m laptop.control.ble_gondola --probe`: it must connect to `BalloonRobot` and
+   print IMU lines with the parsed dict next to each. Set `config.BLE` `IMU_FIELDS` / `GYRO_UNITS` until the dict shows
+   `gz_rad` (and `yaw_rad` if the firmware sends a heading). Rotate the gondola CCW by hand: `gz_rad` must be positive
+   (set `GYRO_SIGN = -1` if not). No ToF on this build: telemetry `alt` is -1 and height comes from vision.
+2. Which letter is which: `python -m laptop.control.ble_gondola --motor C 30` runs one motor at 30 % for 2 s. Repeat for
+   D, E, F and fill `config.BLE` `MOTORS` (L and R at the rear pushing forward, S pushing left, V pushing up) and `SIGN`
+   (-1 where a positive percent pushes the wrong way).
+3. `python -m laptop.control.ble_gondola` in one terminal, `python -m laptop.control.teleop` in another. SPACE arms;
+   `w` -> L and R forward, `s` -> reverse, `j` -> S pushes left, `q` -> V pushes up, `a` -> L back / R forward and
+   telemetry `yaw` rises. Props balanced, foam tape under motors, throttle stays <= 50 % by construction.
+4. Failsafe: Ctrl+C teleop -> the bridge sends `STOP` within 0.5 s and every motor stops. Then kill the BRIDGE while the
+   motors run: if they keep spinning, the firmware has no command timeout yet. Ask the hardware team for one (STOP after
+   500 ms without a command); until then keep the gondola tethered and a `STOP` ready.
+5. Legacy WiFi board instead? Flash `firmware/` (`cd firmware && pio run -t upload`) and pass `--esp wisp-xxxx.local`
+   to teleop / follow_me / pilot; the pin table is PROTOCOL.md section 9.
 6. Only now attach to the balloon. Trim ballast ~1 gf HEAVY (sinks very slowly with motors off; see PROTOCOL.md section 6).
 
 ## 3b. Bench measurements -> `laptop/config.py` PHYS
 
-Now, with the ESP32, the motors and a kitchen scale (no balloon needed):
+Now, with the gondola on Bluetooth (bridge running), the motors and a kitchen scale (no balloon needed):
 1. **T_MAX, REV_EFF**: one motor on the L channel. Tape the motor upright on a light block on the scale, prop blowing UP
    (air away from the pan, >= 15 cm above it), flight LiPo on VM, tare. `teleop`: SPACE, `w` x3 (vf 0.3) read grams, `w` x4 (0.4),
    `w` x5 (0.5 = the mixer cap). Expect ~4.5 / 8 / 12 g. `T_MAX = 9.81e-3 * g(0.5) / 0.25` N; check g(0.5)/g(0.3) ~ 2.8
@@ -306,7 +317,7 @@ Now, with the ESP32, the motors and a kitchen scale (no balloon needed):
 2. **M_GONDOLA**: the complete flight gondola with battery, props, ToF and wire, on the scale.
 3. **MOTOR_SPACING**: ruler, L to R axis.
 4. **TOF_BELOW (partial)**: tape from the lens to the gondola's hanging point + `R_BALLOON`; final value once the balloon hangs.
-5. **IMU sign, ToF range**: section 3 steps 3.
+5. **IMU sign**: section 3 step 1.
 
 Later, with the balloon inflated:
 6. **D**: tape round the equator / pi. **TOF_BELOW (final)**: balloon hanging still, tape floor->lens (h) and floor->equator
@@ -319,7 +330,7 @@ Later, with the balloon inflated:
 
 ## 4. Still to buy / confirm (not ordered yet)
 
-- 3.3 V low-dropout regulator, **>= 500 mA** (ESP32-C3 WiFi bursts ~350 mA; the MCP1700 in the old notes is 250 mA — too small).
+- Legacy WiFi build only: 3.3 V low-dropout regulator, **>= 500 mA** (ESP32-C3 WiFi bursts ~350 mA; the MCP1700 in the old notes is 250 mA — too small).
   Search amazon.ca for "HT7833", "XC6220 3.3V module", or "ME6211 3.3V LDO module". Feeds the C3's 3V3 pin from the LiPo.
 - TP4056 USB-C 1S LiPo charger board (with protection).
 - JST-PH 2.0 mm connector kit + 26-28 AWG silicone wire.
@@ -327,8 +338,9 @@ Later, with the balloon inflated:
 - Confirm: Pi models (Ethernet?), Camera Module 3 variant (standard vs Wide — the two must match), soldering iron access.
 
 ## Milestones
-- [x] M0a fake_esp32 + teleop round-trip; firmware flashed; motors spin
-- [ ] M0b failsafe verified on the board (motors stop 0.5 s after Ctrl+C); IMU sign; ToF range; PHYS measured (section 3b)
+- [x] M0a fake_esp32 + teleop round-trip; Bluetooth bridge + simulated robot pass ble_test / sim_test --ble
+- [ ] M0b bridge connected to the gondola; motor letters and signs verified; IMU sign; STOP within 0.5 s (section 3)
+- [ ] M0c PHYS measured (section 3b)
 - [ ] M1 both camera streams in, focus/exposure locked, skew < 100 ms
 - [ ] M2 intrinsics + floor-tag extrinsics; tag corners within 1 cm; tape-measure test passes
 - [ ] M3 person 3D from YOLO; balloon 3D (COCO stand-in, then fine-tuned)

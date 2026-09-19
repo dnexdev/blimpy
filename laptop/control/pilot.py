@@ -1,7 +1,7 @@
 """Blimpy pilot: voice/text intents -> behaviors -> commands to the balloon. Replaces follow_me.py's keyboard loop.
 
   python -m laptop.control.pilot                       # against: python -m laptop.control.fake_esp32 --sim --plot
-  python -m laptop.control.pilot --esp 192.168.137.214 # real gondola
+  python -m laptop.control.pilot                       # real gondola too: run laptop/control/ble_gondola.py first (it answers on 127.0.0.1)
   python -m laptop.control.pilot --voice local         # whisper + ollama push-to-talk only (no cloud)
   python -m laptop.control.pilot --no-voice            # typed commands only (no whisper/ollama needed)
   python -m laptop.control.pilot --log [NAME]          # + record state/telemetry/intents/commands to data/positioning/ (README 1c)

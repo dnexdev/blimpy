@@ -7,7 +7,7 @@ Inputs : world state on 5007 (laptop/vision/localize.py, or fake_esp32 --sim)
 Output : commands to the ESP32 on 5005
 
   python -m laptop.control.follow_me                       # vs:  python -m laptop.control.fake_esp32 --sim --plot
-  python -m laptop.control.follow_me --esp wisp-9910.local # real gondola (the flight board; config.ESP32_IP)
+  python -m laptop.control.follow_me                       # real gondola: python -m laptop.control.ble_gondola first (Bluetooth bridge)
   python -m laptop.control.follow_me --log [NAME]          # + record state/telemetry/commands to data/positioning/ (README 1c)
 
 Keys: SPACE arm/disarm    n  re-learn the heading (a few short pushes)
