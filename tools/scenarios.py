@@ -28,12 +28,13 @@ class Run:
 
     def __init__(self, seconds, person="static", realism=REAL, psi0=1.0, wind=(0.0, 0.0), seed=0, obstacles=None,
                  start=(0.0, 0.0, 1.5), script=(), nudge=True, arm_at=0.5, stop_cmds_at=None, person_speed=0.5, person_start=None,
-                 cmd_gap=None, **over):
+                 cmd_gap=None, relative=False, person_arena=None, **over):
         self.seconds, self.arm_at, self.stop_cmds_at, self.nudge = seconds, arm_at, stop_cmds_at, nudge
+        self.relative = relative                  # no room camera: seed the estimator from the altimeter (pilot --relative)
         self.cmd_gap = cmd_gap                    # (t0, t1): commands not delivered in between = a WiFi hiccup
         self.wd_hold = False                      # after a watchdog disarm the 'operator' does not re-arm (real life: SPACE again)
         self.w = World(dict(realism, **over), person, psi0, wind, seed, 0.0, obstacles=obstacles, start=start,
-                       person_speed=person_speed, person_start=person_start)
+                       person_speed=person_speed, person_start=person_start, person_arena=person_arena)
         self.est = StateEstimator(alpha=G["POS_ALPHA"], beta=G["VEL_BETA"])
         self.spoken, self.events, self.log = [], [], []
         self.t = 0.0
@@ -52,8 +53,10 @@ class Run:
             for s in w.poll_state():
                 if s["balloon"]: est.update_balloon(s["balloon"], s["t"]); t_balloon = t
                 if s["person"]: beh.on_person(s["person"], s["t"])
+                if s.get("fpv"): beh.on_fpv(s["fpv"], s["t"])
             for m in w.poll_telem():
                 est.update_telem(m["yaw"], m["yr"], m.get("alt"), m.get("t"), now=t); self.wd.telem(m, t, armed)
+            if self.relative and est.p is None: est.seed_relative()
             while self.script and self.script[0][0] <= t:
                 it = self.script.pop(0)[1]
                 self.events.append((round(t, 1), it.get("intent"), beh.handle(it, est), beh.mode))
@@ -64,8 +67,8 @@ class Run:
                 reason = self.wd.check(armed, t)
                 if reason:
                     armed, note = False, reason; self.wd_reasons.append((round(t, 2), reason)); self.wd_hold = True
-                elif est.p is None or t - t_balloon > G["BALLOON_LOST_MS"] / 1000:
-                    armed, note = False, "BALLOON LOST"; self.lost += 1
+                elif (not est.alt_ok) if est.rel else (est.p is None or t - t_balloon > G["BALLOON_LOST_MS"] / 1000):
+                    armed, note = False, ("ALTIMETER LOST" if est.rel else "BALLOON LOST"); self.lost += 1
                 else:
                     vf, vs, yr, vz, note = beh.step(est)
             est.observe_motion(vf, vs, vz, t)
@@ -113,6 +116,67 @@ def follow(realism, person, seconds, seed, psi0=1.0, t_settle=25, d_tol=0.3, hea
         ("collisions", r.w.collisions, r.w.collisions == 0),
         ("lost/disarms", r.lost, r.lost == 0),
     ]
+
+
+EYE = dict(fpv=True, tof=True)     # the eye on the balloon + the ultrasonic, as the real gondola has
+
+
+def sc_follow_eye_walk(seed):
+    """Eye + room camera: the eye fixes the heading at once (no learning push needed) and owns the yaw."""
+    return follow(dict(REAL, **EYE), "walk", 90, seed, t_settle=20, d_tol=0.35, head_tol=12)
+
+
+INNER = ((config.ARENA[0][0] + 1.2, config.ARENA[0][1] + 1.2), (config.ARENA[1][0] - 1.2, config.ARENA[1][1] - 1.2))
+
+
+def follow_eye_only(person, seconds, seed, t_settle=20, d_tol=0.35, head_tol=15, z_tol=0.12, max_d=2.6, **over):
+    """No room camera at all (vision=False): FOLLOW on the eye's bearing + range, height on the ultrasonic. Nothing senses
+    the walls in this mode, so the person (who leads) keeps 1.2 m off them, as a demo person in a booth would."""
+    r = Run(seconds, person, dict(REAL, **EYE, vision=False, **over), psi0=1.0, seed=seed, nudge=False, relative=True,
+            person_arena=INNER, script=[(1.0, {"intent": "follow_me"})]).run()
+    rows = r.after(t_settle)
+    zr = math.sqrt(r.stat(rows, "zerr", lambda v: statistics.mean(x * x for x in v)))
+    return r, [
+        ("dist mean (m)", r.stat(rows, "dist"), abs(r.stat(rows, "dist") - G["D_FOLLOW"]) < d_tol),
+        ("dist max (m)", r.stat(rows, "dist", max), r.stat(rows, "dist", max) < max_d),
+        ("dist min (m)", r.stat(rows, "dist", min), r.stat(rows, "dist", min) > 0.85),
+        ("facing err mean (deg)", r.stat(rows, "bear_err"), r.stat(rows, "bear_err") < head_tol),
+        ("z err rms (m)", zr, zr < z_tol),
+        ("eye saw the person (%)", 100.0 * r.w.fpv_seen / max(1, r.w.fpv_total), r.w.fpv_seen > 0.6 * r.w.fpv_total),
+        # nothing senses walls without the room camera: gusts drift the balloon until it touches one. A touch below
+        # 0.15 m/s is a latex envelope brushing a wall; anything faster means the follow law itself drove into it.
+        ("wall touches (drift, unsensed)", r.w.collisions + r.w.grazes, True),
+        ("worst impact speed (m/s)", r.w.max_impact, r.w.max_impact < 0.15),
+        ("lost/disarms", r.lost, r.lost == 0),
+    ]
+
+
+def sc_follow_eye_only_static(seed):
+    return follow_eye_only("static", 60, seed, d_tol=0.3, head_tol=10)
+
+
+def sc_follow_eye_only_walk(seed):
+    return follow_eye_only("walk", 90, seed)
+
+
+def sc_rotate_eye_only(seed):
+    """No room camera: hover-still, then rotate +90 on the gyro alone; go_to must be refused."""
+    script = [(1.0, {"intent": "hover"}), (8.0, {"intent": "rotate", "degrees": 90}), (20.0, {"intent": "go_to", "target": "judges"})]
+    r = Run(30, "static", dict(REAL, **EYE, vision=False), psi0=1.0, seed=seed, nudge=False, relative=True, script=script).run()
+    a = [x for x in r.log if x["t"] >= 8.0]
+    done = next((x["t"] - 8.0 for x in a if x["t"] > 9 and x["mode"] != "ROTATE"), None)
+    t_meas = 8.0 + done + 1.5 if done is not None else 20.0
+    tot, prev = 0.0, a[0]["psi"]
+    for x in a:
+        if x["t"] >= min(20.0, t_meas): break
+        tot += wrap(x["psi"] - prev); prev = x["psi"]
+    hover = [x for x in r.log if 2.0 <= x["t"] < 8.0]
+    return r, [("rotate +90: turned (deg)", math.degrees(tot), abs(math.degrees(tot) - 90) < 15),
+               ("rotate +90: took (s)", done if done is not None else 99, done is not None and done < 9),
+               ("hover-still: motors quiet (mean effort)", r.stat(hover, "effort"), r.stat(hover, "effort") < 0.25),
+               ("go_to refused (mode stays HOVER)", r.log[-1]["mode"], r.log[-1]["mode"] == "HOVER" and all(e[3] != "GO_TO" for e in r.events)),
+               ("armed throughout", r.lost, r.lost == 0),
+               ("collisions", r.w.collisions, r.w.collisions == 0)]
 
 
 def sc_follow_static_ideal(seed):
@@ -352,7 +416,8 @@ def sc_board_failsafe(seed):
 SCENARIOS = {f.__name__[3:]: f for f in (
     sc_failsafe, sc_follow_static_ideal, sc_follow_static_real, sc_follow_walk, sc_follow_route, sc_hover_gusts, sc_rotate,
     sc_go_to, sc_come_here, sc_altitude_cmds, sc_lift_drift, sc_wrong_initial_heading, sc_gyro_drift,
-    sc_long_hover_then_follow, sc_wander, sc_lossy_links, sc_dance_then_back, sc_tof_noisy_vision, sc_no_tof, sc_board_failsafe)}
+    sc_long_hover_then_follow, sc_wander, sc_lossy_links, sc_dance_then_back, sc_tof_noisy_vision, sc_no_tof, sc_board_failsafe,
+    sc_follow_eye_walk, sc_follow_eye_only_static, sc_follow_eye_only_walk, sc_rotate_eye_only)}
 
 
 # ---------------------------------------------------------------------------------------------------- plotting

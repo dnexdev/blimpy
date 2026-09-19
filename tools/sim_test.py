@@ -67,11 +67,10 @@ def test_follow_walk(seconds=45):
     try:
         while time.monotonic() - t0 < seconds:
             t, now = time.monotonic(), now_ms()
-            r = state_in.recv_latest(only_from=LOCAL[0])
-            if r:
-                s = r[0]
+            for s, _ in state_in.recv_all(only_from=LOCAL[0]):      # every row (the BLE sim also sends eye rows)
                 if s.get("balloon"): est.update_balloon(s["balloon"], s.get("t", now))
                 if s.get("person"): person = s["person"]; beh.on_person(person, s.get("t"))
+                if s.get("fpv"): beh.on_fpv(s["fpv"], s.get("t"))
             r = tel_in.recv_latest(only_from=LOCAL[0])
             if r: est.update_telem(r[0]["yaw"], r[0].get("yr", 0.0))
             vf = vs = yr = vz = 0.0

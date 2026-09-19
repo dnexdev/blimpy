@@ -43,7 +43,7 @@ check("parse garbage -> None", p("hello") is None and p("") is None)
 
 # 2. bridge on the simulated robot
 imu_store.reset()
-world = World(dict(IDEAL), person="static", psi0=0.0, epoch=time.monotonic())
+world = World(dict(IDEAL, tof=True), person="static", psi0=0.0, epoch=time.monotonic())
 tr = SimTransport(world, publish_state=False, imu_units=config.BLE["GYRO_UNITS"])
 br = Bridge(tr, http_port=HTTP, log=lambda s: None)
 threading.Thread(target=br.run, daemon=True).start()
@@ -66,6 +66,8 @@ check("MOTORS line format", (tr.last_cmd or "").startswith("MOTORS ") and len(tr
 check("telemetry ~20 Hz", 8 <= len(fr) <= 16, f"{len(fr)} frames in 0.6 s")
 last = fr[-1] if fr else {}
 check("telemetry armed, mL 0.3, small age", last.get("armed") == 1 and abs(last.get("mL", 0) - 0.3) < 0.02 and 0 <= last.get("age", 99) < 120, str(last))
+check("ultrasonic in the IMU line -> telemetry alt (m)", 0 < last.get("alt", -1) < 3 and abs(last["alt"] + config.PHYS["TOF_BELOW"] - world.b.z) < 0.15,
+      f"alt {last.get('alt')} vs z {world.b.z:.2f} - {config.PHYS['TOF_BELOW']}")
 n0 = tr.n_cmds; drive(vf=0.3, seconds=1.0)
 check("BLE writes rate-limited (heartbeat ~4/s when steady)", 2 <= tr.n_cmds - n0 <= 8, f"{tr.n_cmds - n0} lines in 1 s")
 
