@@ -203,6 +203,45 @@ an image is refused until audio has been appended in the session, so frames wait
 `response.done`; a reply cut off by barge-in comes back `cancelled` with usage null. Latency: text turn to first audio
 1.1-1.5 s; end of a spoken command to tool call to first confirmation audio 1.5 s.
 
+## 1e. Cameras: one eye ON the balloon, one in the room
+
+Hardware on hand: one Arduino/ESP32 camera, one Pi camera module, one ultrasonic sensor. The plan:
+
+| where | what | gives | code |
+|---|---|---|---|
+| **on the gondola, looking forward, tilted ~15 deg down** | the Arduino camera (ESP32-CAM style, MJPEG over the hotspot) | Blimpy's own **eye**: what it sees in conversation (OMNI), and the person to follow: **bearing straight from the image** (no heading calibration, no learning push) + range from the person's height in the frame | `laptop/vision/fpv.py`, `config.FPV`, `pilot --fpv URL` |
+| **on the gondola, looking down** | the ultrasonic | height above the floor -> altitude hold without any camera. The firmware prints it in the IMU line (`alt=87.3`, cm); the bridge forwards it as telemetry `alt` | `config.BLE ALT_KEYS / ALT_UNITS`, `estimator.update_telem` |
+| **in the room, on a tripod / table, ~1.8 m up** | the Pi camera (needs a Pi streaming `rpicam-vid` to `udp://@:5000`), or the laptop webcam, or a phone (DroidCam) | x/y/z of the balloon and the person in the room: hover-in-place, go_to judges, wander, wall avoidance | `laptop/vision/mono.py` (one camera), `localize.py` (two) |
+
+Why not two in the room: the ESP32-CAM is low-res and 250 ms late, poor for triangulation, and the eye is the better
+OMNI story. Why not two on the balloon: weight. **No room camera at all?** `pilot --relative`: the eye + ultrasonic fly
+FOLLOW, ROTATE and HOVER-still; GO_TO and WANDER are refused ("I can't see the room from up here"). Nothing senses walls
+in that mode: the person leads, keep 1 m off the walls.
+
+Offline, all of it runs against the simulated eye (`laptop/sim/world.py`, `fpv=True`):
+```powershell
+python tools/fpv_test.py                       # geometry, sim eye vs truth, relative mode, sign of the follow law (19 checks)
+python tools/scenarios.py eye                  # eye + room camera walk; eye-only static / walk / rotate (no room camera)
+python -m laptop.control.ble_gondola --fake --sim      # the simulated robot now has the ultrasonic and the eye (--no-tof / --no-fpv)
+python -m laptop.control.pilot --no-voice              # FOLLOW uses the eye for yaw; add --relative to pretend there is no room camera
+```
+
+**On the real thing, in this order** (each step is a go/no-go for the next):
+1. Ultrasonic: hardware team adds `alt=<cm>` to the IMU line, pointing down. `python -m laptop.control.ble_gondola --probe`
+   must show `alt=` changing as you lift the gondola; `curl http://127.0.0.1:5008/status` shows `alt` in metres.
+   Set `config.BLE ALT_UNITS` to what they print. Measure sensor-to-balloon-centre -> `config.PHYS TOF_BELOW`.
+2. Eye stream: flash the ESP32-CAM CameraWebServer sketch with the laptop hotspot's SSID/password (`wisp` / see
+   `firmware/`), 640x480, find its IP (`python tools/find_phone.py`), open `http://<ip>:81/stream` in a browser.
+   Then `python -m laptop.vision.fpv --source http://<ip>:81/stream --show`: green box on you, bearing sign flips as
+   you step left/right, range roughly right at 1.5 m and 3 m (else adjust `config.FPV HFOV_DEG` / `PERSON_H`).
+   Put the URL in `config.FPV SOURCE`.
+3. Bench, balloon held by hand, `pilot --no-voice` (+ `--relative` if the room camera is not up yet): say/type
+   `follow_me`, stand 3 m away: the L/R motors should push forward and the gondola turn toward you; step left: it
+   yaws left (if it yaws right, the stream is mirrored: set `config.FPV K_PSI` negative); walk closer than 1 m: it
+   backs off. Then let go.
+4. Room camera (when the Pi or a phone is up): section 2 as before. With both, the pilot prints `FOLLOW eye+room`
+   and the heading estimate locks within a second of the eye seeing you.
+
 ## 1c. Positioning data (record / replay / venue)
 
 `laptop/positioning/` is the scaffold for everything about WHERE things are, independent of which sensor says so.

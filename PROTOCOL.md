@@ -68,6 +68,14 @@ The ESP32 clamps every value to [-1, 1], mixes, then clamps each motor to ±CAP 
 
 ```json
 {"t":123460,"balloon":[x,y,z],"person":[x,y,z],"person_id":3,"src":"vision"}
+{"t":123470,"balloon":null,"person":null,"fpv":{"bearing":0.21,"elev":-0.05,"range":1.8,"conf":0.9,"box":[0.4,0.2,0.6,0.9]},"src":"fpv"}
+```
+The second form is the **eye on the balloon** (`laptop/vision/fpv.py`, or the simulator): where the person is RELATIVE
+to the gondola camera. `bearing` rad, + = the person is to the LEFT (a counter-clockwise yaw centres them); `elev` rad
+from the camera axis; `range` m from the person's height in the frame, `null` when the box is cut by the frame (closer
+than ~1 m); `box` normalised. It carries no world position: `balloon`/`person` are null in such rows. Consumers
+(`pilot.py`, `tools/scenarios.py`) call `Behaviors.on_fpv`. With no room camera at all the pilot runs `--relative`.
+```
 ```
 `null` when not seen in this frame. Metres, world frame. `src` is `"vision"` or `"sim"` (`"fused"` from laptop/positioning/fuse.py).
 Recorded sessions (`laptop/positioning/session.py`) wrap each datagram verbatim in `{"kind","t_ms","wall","data"}`;
