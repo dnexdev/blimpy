@@ -23,7 +23,25 @@ OMNI = dict(
 )
 
 # --- Network ---
-ESP32_IP = "wisp-9910.local"      # the flight board (Build Blueprint). Spare = "wisp-91c8.local". Name = "wisp-" + last 4 hex of the serial; printed at boot. IP changes, name does not.
+ESP32_IP = "127.0.0.1"            # where the control programs send commands. The gondola is on Bluetooth: run
+                                  # `python -m laptop.control.ble_gondola` on this laptop and everything talks to it here.
+                                  # (Legacy WiFi firmware boards answer on "wisp-9910.local" / "wisp-91c8.local".)
+
+# --- Gondola over Bluetooth LE (laptop/control/ble_gondola.py). The firmware takes per-motor PERCENTAGES as text. ---
+BLE = dict(
+    NAME="BalloonRobot",
+    COMMAND_UUID="12345678-1234-1234-1234-123456789001",     # write: "C 40" | "ALL 30" | "MOTORS c d e f" | "STOP"
+    TELEMETRY_UUID="12345678-1234-1234-1234-123456789002",   # notify: one IMU text line per sample
+    MOTORS={"L": "C", "R": "D", "S": "E", "V": "F"},   # our motor -> firmware letter. VERIFY on the bench: ble_gondola --motor C 30
+    SIGN={"L": 1, "R": 1, "S": 1, "V": 1},              # -1 if a motor pushes the wrong way for a positive percent
+    PCT_MAX=100,          # firmware clamp; the mixer's CAP (0.5) keeps normal flight at +-50
+    HZ=20,                # MOTORS lines per second at most (BLE write-without-response)
+    IMU_FIELDS=None,      # names for a bare-numbers IMU line, e.g. ("ax","ay","az","gx","gy","gz"); None = by count / key=value
+    GYRO_UNITS="deg",     # "deg" (deg/s and degrees, most Arduino IMU libraries) or "rad"
+    GYRO_SIGN=1,          # -1 if turning the gondola counter-clockwise (seen from above) gives a NEGATIVE gz
+    IMU_FRESH_MS=200,     # yaw-rate feedback in the mixer only with a sample younger than this
+    HTTP_PORT=5008,       # GET http://127.0.0.1:5008/imu | /imu/history?n=200 | /status
+)
 
 # --- Calibration targets ---
 CALIB_DIR = "calib"

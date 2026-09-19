@@ -239,6 +239,7 @@ class World:
         self.sp, self.arm, self.rx_t = (0.0, 0.0, 0.0, 0.0), False, None
         self.mix_state = {"yawI": 0.0}
         self.cur, self.armed = (0.0, 0.0, 0.0, 0.0), False
+        self.motor_override = None               # (L, R, S, V) duties pushed by the BLE bridge stand-in; None = own mixer
         self.yaw_gyro, self.gz_meas = 0.0, 0.0
         self.age_ms = -1
         # queues
@@ -274,7 +275,13 @@ class World:
             self.rx_t = self.t
         self.age_ms = int((self.t - self.rx_t) * 1000) if self.rx_t is not None else -1
         ok = self.arm and 0 <= self.age_ms < FAILSAFE_MS
-        if ok:
+        if self.motor_override is not None:                    # motors set from outside (laptop/control/ble_gondola.py --fake)
+            self.cur = tuple(clamp(m, -1, 1) for m in self.motor_override)
+            on = any(abs(m) > 1e-6 for m in self.cur)
+            if on and not self.armed: self.arm_events += 1
+            if self.armed and not on: self.disarm_events += 1
+            self.armed = on
+        elif ok:
             if not self.armed: self.arm_events += 1
             self.armed = True
             self.cur = mix(self.sp, self.gz_meas / YR_MAX, self.cur, self.mix_state)

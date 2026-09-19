@@ -13,6 +13,8 @@ ollama
 faster-whisper
 sounddevice
 pyttsx3
+# gondola link (laptop/control/ble_gondola.py): Bluetooth LE
+bleak
 # OMNI Live track (laptop/voice/omni.py, omni_watch.py): Qwen3.5-Omni over the yibuapi relay. websockets = offline mock server only
 websocket-client
 requests
