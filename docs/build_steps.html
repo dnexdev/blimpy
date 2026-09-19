@@ -1,0 +1,410 @@
+<title>Blimpy Build Steps</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --paper: #F5F2EA; --paper-2: #ECE8DD; --ink: #1B2431; --ink-2: #4A5568; --line: #7C8AA0; --rule: #CBC6B8;
+    --dim: #1F5FBF; --dim-soft: #DCE7F8; --warn: #B7410E; --warn-soft: #F7E3D8; --ok: #2E7D4F; --ok-soft: #DDEFE3;
+    --done: #E3E9DC;
+    --mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+    --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --cond: "IBM Plex Sans Condensed", "Arial Narrow", "IBM Plex Sans", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #0E2A4C; --paper-2: #123457; --ink: #E8EEF7; --ink-2: #B7C6DB; --line: #6F8BB0; --rule: #2C4B75;
+      --dim: #8DB8FF; --dim-soft: #173E6B; --warn: #FFA36B; --warn-soft: #4A2A1A; --ok: #7ED3A0; --ok-soft: #173D2B; --done: #12304A;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #0E2A4C; --paper-2: #123457; --ink: #E8EEF7; --ink-2: #B7C6DB; --line: #6F8BB0; --rule: #2C4B75;
+    --dim: #8DB8FF; --dim-soft: #173E6B; --warn: #FFA36B; --warn-soft: #4A2A1A; --ok: #7ED3A0; --ok-soft: #173D2B; --done: #12304A;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font-family: var(--sans); font-size: 16px; line-height: 1.5;
+    background-image: linear-gradient(var(--rule) 1px, transparent 1px), linear-gradient(90deg, var(--rule) 1px, transparent 1px);
+    background-size: 40px 40px; background-position: -1px -1px; }
+  main { max-width: 860px; margin: 0 auto; padding: 28px 18px 90px; background: var(--paper); }
+  h1, h2, h3 { font-family: var(--cond); text-wrap: balance; line-height: 1.15; margin: 0; }
+  h1 { font-size: 38px; font-weight: 700; letter-spacing: -0.01em; }
+  h2 { font-size: 24px; font-weight: 600; margin-top: 44px; padding-top: 14px; border-top: 2px solid var(--ink); }
+  p { max-width: 68ch; margin: 10px 0; }
+  .eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--dim); margin-bottom: 8px; }
+  .titleblock { border: 2px solid var(--ink); padding: 18px 22px; }
+  .lede { font-size: 16.5px; color: var(--ink-2); max-width: 66ch; }
+  code { font-family: var(--mono); font-size: 0.9em; background: var(--paper-2); padding: 1px 5px; border-radius: 3px; }
+  .progress { position: sticky; top: 0; z-index: 2; background: var(--paper); border-bottom: 1px solid var(--rule); padding: 10px 0; margin: 20px 0 8px;
+    display: flex; align-items: center; gap: 14px; font-family: var(--cond); font-size: 15px; }
+  .bar { flex: 1; height: 8px; background: var(--paper-2); border: 1px solid var(--rule); border-radius: 4px; overflow: hidden; }
+  .bar > i { display: block; height: 100%; width: 0; background: var(--ok); transition: width 0.2s; }
+  .progress button { font: inherit; font-size: 13px; background: none; border: 1px solid var(--line); color: var(--ink-2); border-radius: 3px; padding: 3px 9px; cursor: pointer; }
+  .progress button:focus-visible, .step summary:focus-visible, input:focus-visible { outline: 2px solid var(--dim); outline-offset: 2px; }
+  ol.rules { padding-left: 22px; max-width: 72ch; }
+  ol.rules li { margin: 6px 0; }
+  .mat { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px 28px; }
+  .mat h3 { font-size: 15px; font-weight: 600; margin: 0 0 4px; }
+  .mat ul { margin: 0; padding-left: 18px; font-size: 14.5px; }
+  .phase { font-family: var(--cond); font-size: 20px; font-weight: 600; margin: 40px 0 8px; padding-top: 12px; border-top: 2px solid var(--ink); }
+  .step { border: 1px solid var(--rule); background: var(--paper-2); margin: 12px 0; }
+  .step summary { list-style: none; cursor: pointer; display: grid; grid-template-columns: 30px 56px 1fr; gap: 10px; align-items: center; padding: 10px 14px; }
+  .step summary::-webkit-details-marker { display: none; }
+  .step .n { font-family: var(--cond); font-weight: 700; font-size: 22px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  .step .t { font-family: var(--cond); font-weight: 600; font-size: 18px; }
+  .step input { width: 20px; height: 20px; margin: 0; accent-color: var(--ok); cursor: pointer; }
+  .step.done { background: var(--done); }
+  .step.done .t { color: var(--ink-2); text-decoration: line-through; text-decoration-thickness: 1px; }
+  .body { padding: 2px 14px 14px 14px; border-top: 1px solid var(--rule); }
+  .body h4 { font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-2); margin: 12px 0 4px; }
+  .body section.do h4 { color: var(--dim); }
+  .body section.see h4 { color: var(--ok); }
+  .body section.ifnot h4 { color: var(--warn); }
+  .body ul, .body ol { margin: 0; padding-left: 20px; font-size: 14.5px; }
+  .body li { margin: 3px 0; }
+  .body ol li::marker { font-family: var(--mono); font-size: 12.5px; color: var(--dim); }
+  .foot { color: var(--ink-2); font-size: 14px; margin-top: 36px; }
+  @media (max-width: 600px) { h1 { font-size: 30px; } .step summary { grid-template-columns: 26px 40px 1fr; } }
+  @media (prefers-reduced-motion: reduce) { .bar > i { transition: none; } }
+</style>
+<main>
+<div class="eyebrow">Helium balloon follow-me robot · assembly procedure · 38 steps</div>
+<div class="titleblock"><h1>Blimpy Build Steps</h1><p class="lede">One step at a time, from the finished breadboard to the first flight. Each step: what you need, what to do, what you should see, and what to do if you do not. Tick a step when its "you should see" has happened; the next one opens.</p><p class="lede">Every command runs in PowerShell from the repo root (on this laptop plain <code>python</code>, no venv). The design behind the steps is <code>docs/ROBOT_BUILD.md</code>; this page is <code>docs/BUILD_STEPS.md</code> with checkboxes.</p></div>
+<div class="progress"><span class="count">0 of 38 steps done</span><div class="bar"><i></i></div><button type="button" class="all">Open all</button><button type="button" class="reset">Reset</button></div>
+<h2>Rules while building</h2><ol class="rules"><li>Whenever a motor runs on the bench, the gondola is taped or clamped to the table and hands, hair and cables are clear of the props.</li><li>Whenever the balloon flies, one person stands next to the battery switch and does nothing else.</li><li>Never re-plug a motor or driver wire while the battery is on. Switch off, change, switch on.</li><li>Hot glue burns. Let each joint set for 30 seconds before you let go.</li><li>A latex balloon pops on rings, watches, rough tables and hot lights. Handle it like an egg.</li><li>Write every measured number into <code>calib/MEASUREMENTS.md</code> the moment you measure it, with the date.</li></ol>
+<h2>What to have on the table</h2><div class="mat">
+<div><h3>From the hardware team</h3><ul><li>the finished breadboard: Bluetooth board, two motor drivers, IMU, four motors with leads, battery and its switch or connector</li><li>four props: two clockwise, two counter-clockwise (the 8520 kit has both; they are marked A/B or CW/CCW)</li></ul></div>
+<div><h3>Frame</h3><ul><li>a stiff 30 cm stick: a chopstick, a bamboo skewer pair taped together, or a carbon rod</li><li>foam board or stiff corrugated cardboard, about 20 x 15 cm (the chassis plate)</li><li>a wine cork, or a foam block about 4 cm tall (the standoff for the vertical motor)</li><li>soft foam mounting tape (double-sided), masking tape, 6 small zip ties</li><li>hot glue gun with glue, scissors or a craft knife, a marker</li></ul></div>
+<div><h3>Hang</h3><ul><li>kite string or strong sewing thread, about 1 m</li><li>one keyring (2-3 cm) and one mini carabiner (keychain clip)</li><li>two or three zip ties for the balloon neck</li></ul></div>
+<div><h3>Trim and measure</h3><ul><li>coins: dimes (1.75 g each), nickels (3.95 g), quarters (4.40 g); a pinch of blu-tack</li><li>a kitchen scale, a tape measure (3 m or longer), a ruler</li></ul></div>
+<div><h3>Balloon</h3><ul><li>the 48-inch white latex balloon (plus a spare)</li><li>helium: about 25 cubic feet for 1.10 m, so two disposable party tanks, or one cylinder</li></ul></div>
+<div><h3>Laptop</h3><ul><li>this repo, plain <code>python</code> with the packages installed (README section 0), Bluetooth on, the mat board (the four AprilTags on one rigid board)</li></ul></div>
+</div>
+<div class="phase">Phase A. The laptop and the box, before building anything</div>
+<details class="step" id="step-1" open>
+<summary><input type="checkbox" data-i="1" aria-label="Step 1 done" onclick="event.stopPropagation()"><span class="n">01</span><span class="t">Get the laptop ready</span></summary>
+<div class="body">
+<section class="need"><h4>You need</h4><ul><li>the laptop, Bluetooth switched on in Windows Settings</li><li>the repo at <code>C:\Users\raymo\Projects\blimpy</code></li></ul></section>
+<section class="do"><h4>Do</h4><ol><li>Open PowerShell. Run <code>cd C:\Users\raymo\Projects\blimpy</code>.</li><li>Run <code>git pull</code>.</li><li>Run <code>python -c "import bleak, cv2, ultralytics, torch; print('ok')"</code>. There is no venv on this laptop: the packages live in the Windows Store Python, and plain <code>python</code> is the right one.</li><li>Open Windows Settings &gt; Bluetooth &amp; devices and make sure Bluetooth is On.</li></ol></section>
+<section class="see"><h4>You should see</h4><ul><li><code>git pull</code> says <code>Already up to date.</code> or lists the files it fetched.</li><li>The import line prints <code>ok</code> after a few seconds (torch takes a moment to load).</li></ul></section>
+<section class="ifnot"><h4>If not</h4><ul><li><code>ModuleNotFoundError</code>: this is another machine or another Python. Follow README section 0 (venv, torch, <code>pip install -r requirements.txt</code>) and use that venv for every command.</li><li><code>git pull</code> complains about local changes: run <code>git status</code>, ask the software side before discarding anything.</li></ul></section>
+</div></details>
+<details class="step" id="step-2">
+<summary><input type="checkbox" data-i="2" aria-label="Step 2 done" onclick="event.stopPropagation()"><span class="n">02</span><span class="t">Prove the laptop side works with no hardware</span></summary>
+<div class="body">
+<section class="need"><h4>You need</h4><ul><li>nothing but the laptop</li></ul></section>
+<section class="do"><h4>Do</h4><ol><li>Run <code>python tools/ble_test.py</code>. It takes about 12 seconds.</li></ol></section>
+<section class="see"><h4>You should see</h4><ul><li>Every line says <code>PASS</code> and the last line reads <code>N/N checks passed</code> with the two numbers equal.</li></ul></section>
+<section class="ifnot"><h4>If not</h4><ul><li>Any <code>FAIL</code>: stop here. It is a laptop-side problem; paste the output to the software side. Nothing in the next steps can work until this passes.</li></ul></section>
+</div></details>
+<details class="step" id="step-3">
+<summary><input type="checkbox" data-i="3" aria-label="Step 3 done" onclick="event.stopPropagation()"><span class="n">03</span><span class="t">Get the facts about the box from the hardware team</span></summary>
+<div class="body">
+<section class="need"><h4>You need</h4><ul><li>the hardware team, two minutes of their time</li><li><code>calib/MEASUREMENTS.md</code> open in an editor</li></ul></section>
+<section class="do"><h4>Do</h4><ol><li>Ask: how is it switched on and off (switch, connector, which wire)?</li><li>Ask: what battery is it (cells, voltage, mAh) and how is it charged?</li><li>Ask: which motor driver chips (read the chip name off the driver boards: DRV8833, TB6612, MX1508, L298N...)?</li><li>Ask: does the firmware stop the motors by itself when no command arrives for 500 ms?</li><li>Ask: how many IMU lines per second does it send over Bluetooth (notify calls, not IMU reads)? Is anything else in the line? (No ultrasonic on the 2026-09-19 box: it ran out of pins.)</li><li>Write the five answers under a new heading <code>## The box (2026-09-19)</code> at the end of <code>calib/MEASUREMENTS.md</code>.</li></ol></section>
+<section class="see"><h4>You should see</h4><ul><li>Five answers written down. You know how to switch it off in a hurry.</li></ul></section>
+<section class="ifnot"><h4>If not</h4><ul><li>Driver is an L298N on a single 3.7 V cell: the motors will barely turn (the chip eats about 2 V). Tell the hardware team now; the rest of the build still goes ahead.</li><li>No firmware timeout: also fine for now. Until they add one, a person stays on the switch whenever motors run (rule 2).</li></ul></section>
+</div></details>
+<details class="step" id="step-4">
+<summary><input type="checkbox" data-i="4" aria-label="Step 4 done" onclick="event.stopPropagation()"><span class="n">04</span><span class="t">Power the box and connect to it</span></summary>
+<div class="body">
+<section class="need"><h4>You need</h4><ul><li>the breadboard with its battery</li><li>the laptop</li></ul></section>
+<section class="do"><h4>Do</h4><ol><li>Switch the box on. Keep it on the table, flat, chip side up, and do not move it.</li><li>Run <code>python -m laptop.control.ble_gondola --probe</code>.</li></ol></section>
+<section class="see"><h4>You should see</h4><ul><li><code>[ble] scanning for 'BalloonRobot'...</code> then <code>[ble] connected to BalloonRobot at XX:XX:XX:XX:XX:XX</code>.</li><li>Then a stream of lines like <code>[imu] 'A:-0.16,-0.01,1.08;G:-2.1,2.0,-0.4;T:44.5' -&gt; {'ax': -0.16, ... 'gz_rad': -0.007}</code> for 10 seconds, then it exits.</li><li>Then the last line, the verdict: <code>[probe] 487 lines in 10 s = 48.7 per second, gap median 20 ms max 45 ms: OK</code>. Any count of 200 or more says OK.</li></ul></section>
+<section class="ifnot"><h4>If not</h4><ul><li><code>not found</code>: is the box on? Is a phone or another laptop already connected to it (Bluetooth takes one connection)? Is Windows Bluetooth on? Move within 2 m and try again.</li><li>Lines print but end in <code>-&gt; None</code>: the line format is not understood. Copy one raw line to the software side.</li><li>The verdict says <code>SLOW</code> or <code>TOO SLOW</code> (2026-09-19: 10 lines in 10 s, one per second): the box notifies too rarely. The laptop prints every notification the moment it arrives, so the slow part is in the firmware or the radio. Give the hardware team the verdict line and ask for one notification per IMU sample at 20-50 per second. Quick test for them: add a counter <code>;N:123</code> (+1 per notify call) to the line. N counting 1, 2, 3 at the laptop = the firmware notifies once a second; N jumping by ~100 = the radio drops them, so notify every 20-50 ms, not every 10. Steps 5 to 9 can go ahead meanwhile; tick this step when the verdict says OK.</li></ul></section>
+</div></details>
+<details class="step" id="step-5">
+<summary><input type="checkbox" data-i="5" aria-label="Step 5 done" onclick="event.stopPropagation()"><span class="n">05</span><span class="t">Check the IMU is the right way up and the right way round</span></summary>
+<div class="body">
+<section class="need"><h4>You need</h4><ul><li>the probe output from the previous step</li></ul></section>
+<section class="do"><h4>Do</h4><ol><li>In the printed dicts, read <code>az</code> (the third number after <code>A:</code>). With the box flat and the IMU chip facing up it is about +1.0.</li><li>Run <code>python -m laptop.control.ble_gondola --probe</code> again. While it prints, turn the whole breadboard counter-clockwise, seen from above (the way you unscrew a jar), steadily, for about two seconds. Then turn it clockwise for two seconds.</li><li>Read <code>gz</code> (the third number after <code>G:</code>) during each turn.</li></ol></section>
+<section class="see"><h4>You should see</h4><ul><li><code>az</code> about +1.0 at rest (between +0.9 and +1.1).</li><li><code>gz</code> clearly positive while turning counter-clockwise (tens of degrees per second), clearly negative while turning clockwise, back near 0 at rest.</li></ul></section>
+<section class="ifnot"><h4>If not</h4><ul><li><code>az</code> about -1.0: the IMU is mounted upside down. Best fix: turn the IMU board over so the chip faces up (ask the hardware team). If that is impossible, set <code>GYRO_SIGN=-1</code> in <code>config.BLE</code> (upside down flips the yaw sign).</li><li><code>gz</code> negative when turning counter-clockwise: open <code>laptop/config.py</code>, find <code>GYRO_SIGN=1</code> inside <code>BLE = dict(...)</code>, change it to <code>GYRO_SIGN=-1</code>, save.</li><li><code>gz</code> does not change when you turn: the gyro is not being read. Hardware team.</li></ul></section>
+</div></details>
+<details class="step" id="step-6">
+<summary><input type="checkbox" data-i="6" aria-label="Step 6 done" onclick="event.stopPropagation()"><span class="n">06</span><span class="t">Find out which letter is which motor</span></summary>
+<div class="body">
+<section class="need"><h4>You need</h4><ul><li>the box on the table, taped down so it cannot walk; four strips of masking tape and a marker</li><li>props off if the hardware team has not fitted them; props on is fine as long as fingers stay clear</li></ul></section>
+<section class="do"><h4>Do</h4><ol><li>Run <code>python -m laptop.control.ble_gondola --motor C 30</code>.</li><li>Watch which motor spins for 2 seconds. Stick a tape label on that motor's body: <code>C</code>.</li><li>Repeat with <code>--motor D 30</code>, <code>--motor E 30</code>, <code>--motor F 30</code>, labelling each motor.</li></ol></section>
+<section class="see"><h4>You should see</h4><ul><li>Each command ends with <code>[ble] C 30 for 2 s</code> then <code>[ble] STOP</code>.</li><li>Each letter spins exactly one motor, and every motor has a letter.</li></ul></section>
+<section class="ifnot"><h4>If not</h4><ul><li>A letter spins nothing: that driver channel or motor is dead or unplugged. Hardware team.</li><li>Two letters spin the same motor, or one letter spins two: wiring at the drivers is crossed. Hardware team.</li><li><code>STOP NOT DELIVERED: link is down</code>: the Bluetooth link dropped mid-run. Switch the box off, then on, and repeat that letter.</li></ul></section>
+</div></details>
+<details class="step" id="step-7">
+<summary><input type="checkbox" data-i="7" aria-label="Step 7 done" onclick="event.stopPropagation()"><span class="n">07</span><span class="t">Check every motor reverses</span></summary>
+<div class="body">
+<section class="need"><h4>You need</h4><ul><li>the same setup</li></ul></section>
+<section class="do"><h4>Do</h4><ol><li>Run <code>python -m laptop.control.ble_gondola --motor C -30</code>. Watch the shaft (or feel the air): it must spin the other way than with <code>+30</code>.</li><li>Repeat for D, E and F.</li></ol></section>
+<section class="see"><h4>You should see</h4><ul><li>All four motors spin both ways.</li></ul></section>
+<section class="ifnot"><h4>If not</h4><ul><li>A motor spins the same way for <code>+30</code> and <code>-30</code>, or not at all for <code>-30</code>: that channel is wired for one direction only (both driver inputs are needed per motor). Hardware team. The software cannot brake or descend without reverse.</li></ul></section>
+</div></details>
+<details class="step" id="step-8">
+<summary><input type="checkbox" data-i="8" aria-label="Step 8 done" onclick="event.stopPropagation()"><span class="n">08</span><span class="t">Give the motors their jobs and write the map into the config</span></summary>
+<div class="body">
+<section class="need"><h4>You need</h4><ul><li>the four labelled motors</li><li><code>laptop/config.py</code> open in an editor</li></ul></section>
+<section class="do"><h4>Do</h4><ol><li>Look at the motor leads. The two motors with the longest leads become L (rear left) and R (rear right): they sit 12.5 cm out on the bar. The other two become S (sideways) and V (vertical).</li><li>Add the job to each tape label: for example <code>C = L</code>, <code>D = R</code>, <code>E = S</code>, <code>F = V</code>.</li><li>In <code>laptop/config.py</code> find the line <code>MOTORS={"L": "C", "R": "D", "S": "E", "V": "F"},</code> inside <code>BLE = dict(...)</code>. Change the letters to match your labels. Save the file.</li></ol></section>
+<section class="see"><h4>You should see</h4><ul><li>Each motor carries a label with a letter and a job. The config line matches the labels.</li></ul></section>
+<section class="ifnot"><h4>If not</h4><ul><li>Unsure which lead is longest: it does not matter much; leads can be extended in step 19.</li></ul></section>
+</div></details>
+<details class="step" id="step-9">
+<summary><input type="checkbox" data-i="9" aria-label="Step 9 done" onclick="event.stopPropagation()"><span class="n">09</span><span class="t">Check the map through the bridge</span></summary>
+<div class="body">
+<section class="need"><h4>You need</h4><ul><li>two PowerShell windows, both in the repo folder</li></ul></section>
+<section class="do"><h4>Do</h4><ol><li>Window 1: <code>python -m laptop.control.ble_gondola</code>. Leave it running.</li><li>Window 2: <code>python -m laptop.control.teleop</code>.</li><li>Do not touch the box for 3 seconds (the bridge learns the gyro's resting offset), then press SPACE in window 2.</li><li>Press <code>w</code> once. Watch the motors. Press <code>x</code>.</li><li>Press <code>j</code> once. Watch. Press <code>x</code>.</li><li>Press <code>q</code> once. Watch. Press <code>x</code>.</li><li>Press SPACE to disarm, then ESC. Leave window 1 running for the next steps, or Ctrl+C it.</li></ol></section>
+<section class="see"><h4>You should see</h4><ul><li>Window 1 shows <code>[bridge] BLE  ARMED age=  ...</code> and, on <code>w</code>, the L and R letters at <code>+10</code> (for example <code>C= +10 D= +10 E=  +0 F=  +0</code>). The motors labelled L and R spin.</li><li>On <code>j</code> only the S motor spins; on <code>q</code> only the V motor spins.</li><li>The bridge line shows <code>imu 20.0 Hz</code> or close to it.</li></ul></section>
+<section class="ifnot"><h4>If not</h4><ul><li>A different motor spins than the label says: the map in step 8 is wrong; fix the letters and repeat.</li><li>Window 1 says <code>MOTORS OFF (arm=1 age=... ble=0)</code>: the Bluetooth link dropped. Wait; it reconnects within a few seconds.</li><li>Window 2 shows no telemetry (<code>armed=</code> never appears): something else is holding UDP port 5006 (an old python process). Close every other PowerShell window and try again.</li></ul></section>
+</div></details>
+<div class="phase">Phase B. Build the gondola around the breadboard</div>
+<details class="step" id="step-10">
+<summary><input type="checkbox" data-i="10" aria-label="Step 10 done" onclick="event.stopPropagation()"><span class="n">10</span><span class="t">Lay out the materials</span></summary>
+<div class="body">
+<section class="need"><h4>You need</h4><ul><li>everything in the materials list above</li></ul></section>
+<section class="do"><h4>Do</h4><ol><li>Clear a table. Put the hot glue gun on to heat.</li><li>Cut the three bridle strings now: three pieces of 25 cm.</li></ol></section>
+<section class="see"><h4>You should see</h4><ul><li>Everything within reach; glue gun hot.</li></ul></section>
+<section class="ifnot"><h4>If not</h4><ul><li>Missing a stick: two bamboo skewers taped together with masking tape along their whole length are stiff enough.</li></ul></section>
+</div></details>
+<details class="step" id="step-11">
+<summary><input type="checkbox" data-i="11" aria-label="Step 11 done" onclick="event.stopPropagation()"><span class="n">11</span><span class="t">Make the chassis plate</span></summary>
+<div class="body">
+<section class="need"><h4>You need</h4><ul><li>foam board or stiff cardboard, marker, ruler, knife or scissors</li></ul></section>
+<section class="do"><h4>Do</h4><ol><li>Put the breadboard on the board and draw around it. Draw a second outline 2 cm outside the first on every side. Cut on the outer line. That is the plate.</li><li>Choose one LONG edge as the FRONT. Draw a big arrow on the plate pointing at it and write FRONT.</li><li>Draw both diagonals; their crossing is the CENTRE. Mark it with a dot. Draw the front-back centre line through the dot.</li><li>Poke three small holes 1 cm in from the edge: one at the front edge on the centre line, one at each rear corner. These are the bridle holes.</li><li>Write L on the left rear corner and R on the right rear corner, as seen from above with FRONT pointing away from you.</li></ol></section>
+<section class="see"><h4>You should see</h4><ul><li>A plate 4 cm longer and 4 cm wider than the breadboard, FRONT arrow, centre dot, centre line, three holes.</li></ul></section>
+<section class="ifnot"><h4>If not</h4><ul><li>The board is floppy: laminate two layers with glue, or use the lid of a shoebox. A floppy plate turns thrust into wobble and the IMU reads wobble as motion.</li></ul></section>
+</div></details>
+<details class="step" id="step-12">
+<summary><input type="checkbox" data-i="12" aria-label="Step 12 done" onclick="event.stopPropagation()"><span class="n">12</span><span class="t">Fix the breadboard to the plate</span></summary>
+<div class="body">
+<section class="need"><h4>You need</h4><ul><li>the plate, the breadboard, foam tape</li></ul></section>
+<section class="do"><h4>Do</h4><ol><li>Peel the breadboard's adhesive backing if it has one; otherwise put four strips of foam tape under it.</li><li>Press it onto the plate, centred on the centre dot, its long edges parallel to the plate's long edges.</li><li>Look at the IMU. It must be flat, parallel to the plate, chip facing up, and fixed. If it hangs on jumper wires, stick it to the top of the breadboard with a square of foam tape, chip up.</li></ol></section>
+<section class="see"><h4>You should see</h4><ul><li>Breadboard centred and square on the plate. IMU flat, chip up, not moving when you tap it.</li></ul></section>
+<section class="ifnot"><h4>If not</h4><ul><li>The IMU cannot be made flat without unplugging wires: switch the box off first, then move it, then switch on and repeat step 5.</li></ul></section>
+</div></details>
+<details class="step" id="step-13">
+<summary><input type="checkbox" data-i="13" aria-label="Step 13 done" onclick="event.stopPropagation()"><span class="n">13</span><span class="t">Glue the rear bar under the rear edge</span></summary>
+<div class="body">
+<section class="need"><h4>You need</h4><ul><li>the 30 cm stick, ruler, marker, hot glue, two zip ties</li></ul></section>
+<section class="do"><h4>Do</h4><ol><li>Mark the stick's centre. Mark 12.5 cm to each side of the centre: the motor spots, 25 cm apart.</li><li>Turn the plate over. Lay the stick along the REAR edge, its centre mark on the plate's centre line, the stick parallel to the rear edge, sticking out equally on both sides.</li><li>Hot-glue it along its whole contact with the plate. Hold 30 seconds.</li><li>Optional but worth it: poke two holes through the plate either side of the stick, near each end of the plate, and zip-tie the stick to the plate.</li></ol></section>
+<section class="see"><h4>You should see</h4><ul><li>The bar is straight, centred, parallel to the rear edge, and the two motor marks are 25 cm apart and equally far from the centre line.</li></ul></section>
+<section class="ifnot"><h4>If not</h4><ul><li>It sits crooked: reheat the glue with the gun tip, straighten, hold again.</li></ul></section>
+</div></details>
+<details class="step" id="step-14">
+<summary><input type="checkbox" data-i="14" aria-label="Step 14 done" onclick="event.stopPropagation()"><span class="n">14</span><span class="t">Mount L and R on the bar ends</span></summary>
+<div class="body">
+<section class="need"><h4>You need</h4><ul><li>the motors labelled L and R, foam tape, hot glue</li></ul></section>
+<section class="do"><h4>Do</h4><ol><li>Wrap one turn of foam tape around the can of the L motor.</li><li>Turn the plate right side up. Place the L motor on TOP of the left end of the bar, its can centred on the left mark, its SHAFT POINTING BACKWARD (away from FRONT), its axis parallel to the plate's centre line.</li><li>Hot-glue the taped can to the bar. Hold 30 seconds.</li><li>Same for the R motor at the right mark: shaft backward, axis parallel to the centre line.</li><li>Sight along the plate from behind: both shafts point exactly backward and are parallel; both motors sit at the same height.</li></ol></section>
+<section class="see"><h4>You should see</h4><ul><li>From above, the two shafts are parallel to the FRONT arrow and point away from it, 25 cm apart. The props (later) will spin behind the bar.</li></ul></section>
+<section class="ifnot"><h4>If not</h4><ul><li>A shaft points inward or outward: reheat and rotate the can. A few degrees of error is a steady sideways push that the software has to fight.</li></ul></section>
+</div></details>
+<details class="step" id="step-15">
+<summary><input type="checkbox" data-i="15" aria-label="Step 15 done" onclick="event.stopPropagation()"><span class="n">15</span><span class="t">Mount S on the right edge</span></summary>
+<div class="body">
+<section class="need"><h4>You need</h4><ul><li>the motor labelled S, foam tape, hot glue</li></ul></section>
+<section class="do"><h4>Do</h4><ol><li>Find the middle of the plate's RIGHT edge (front to back). It lies on a line through the centre dot, perpendicular to the centre line.</li><li>Wrap the S can in foam tape. Glue it to the right edge at that middle, on top of the plate, shaft pointing OUTWARD (to the right), axis parallel to the plate's left-right direction.</li><li>Check from above: the shaft line passes through the centre dot when extended.</li></ol></section>
+<section class="see"><h4>You should see</h4><ul><li>The S shaft points straight out to the right, in line with the plate's centre. Its prop will spin outboard, clear of the plate.</li></ul></section>
+<section class="ifnot"><h4>If not</h4><ul><li>It cannot sit at the exact middle because a component is in the way: up to 2 cm forward or back is acceptable (the yaw loop cancels the small twist). More than that: move it to the left edge instead, shaft pointing left; then its plus direction will need <code>SIGN=-1</code> in step 21.</li></ul></section>
+</div></details>
+<details class="step" id="step-16">
+<summary><input type="checkbox" data-i="16" aria-label="Step 16 done" onclick="event.stopPropagation()"><span class="n">16</span><span class="t">Mount V under the centre</span></summary>
+<div class="body">
+<section class="need"><h4>You need</h4><ul><li>the motor labelled V, the cork, foam tape, hot glue</li></ul></section>
+<section class="do"><h4>Do</h4><ol><li>Turn the plate over. Hot-glue the cork standing on the centre dot (the wide end on the plate). Hold 30 seconds.</li><li>Wrap the V can in foam tape. Glue it to the free end of the cork with the SHAFT POINTING DOWN, straight, so the axis is vertical when the plate is level.</li><li>Check the shaft is plumb: stand the plate on its bar and look from two sides.</li></ol></section>
+<section class="see"><h4>You should see</h4><ul><li>V hangs 4 cm under the middle of the plate, shaft straight down. Nothing else is under the centre.</li></ul></section>
+<section class="ifnot"><h4>If not</h4><ul><li>No cork: a stack of foam tape 3-4 cm tall, or a short piece of thick marker pen, works. The prop needs 2 cm of free air above and below it.</li></ul></section>
+</div></details>
+<details class="step" id="step-17">
+<summary><input type="checkbox" data-i="17" aria-label="Step 17 done" onclick="event.stopPropagation()"><span class="n">17</span><span class="t">Fit the battery</span></summary>
+<div class="body">
+<section class="need"><h4>You need</h4><ul><li>the battery, foam tape or velcro</li></ul></section>
+<section class="do"><h4>Do</h4><ol><li>Switch the box off if it is on.</li><li>Stick the battery UNDER the plate on the LEFT half, flat, with velcro or two strips of foam tape, so it can come off for charging. The V prop hangs 4 cm lower, so the battery may sit right against the plate.</li><li>Route its lead to the breadboard along the plate's underside and tape it every 5 cm. The switch or connector must be reachable from outside without touching a prop.</li></ol></section>
+<section class="see"><h4>You should see</h4><ul><li>Battery firm, on the left, lead taped, switch reachable.</li></ul></section>
+<section class="ifnot"><h4>If not</h4><ul><li>The battery is a 9 V block or a 2S pack: same rules; note its weight later in step 26.</li></ul></section>
+</div></details>
+<details class="step" id="step-18">
+<summary><input type="checkbox" data-i="18" aria-label="Step 18 done" onclick="event.stopPropagation()"><span class="n">18</span><span class="t">Check the underside (there is no ultrasonic on this box)</span></summary>
+<div class="body">
+<section class="need"><h4>You need</h4><ul><li>the gondola, turned over</li></ul></section>
+<section class="do"><h4>Do</h4><ol><li>The box has no ultrasonic (it ran out of pins), so height will come from the room camera and there is nothing to fit here.</li><li>Turn the gondola over. Under the plate there must be only: the battery (left half), the V standoff and motor (centre), and taped leads.</li><li>Check that nothing under the plate reaches lower than the V prop will (the standoff height plus 2 cm): no connector, no battery corner, no loose tape.</li></ol></section>
+<section class="see"><h4>You should see</h4><ul><li>A flat underside: battery, standoff, taped leads, nothing else, nothing lower than the V prop.</li></ul></section>
+<section class="ifnot"><h4>If not</h4><ul><li>Something hangs lower than the V prop: move it to the top side or tape it flat. It would be the first thing to touch the floor, and the V prop's air must be free (rule 3 in <code>docs/ROBOT_BUILD.md</code>).</li><li>An ultrasonic is added later: stick it under the front edge on the centre line looking straight down, 10 cm from V, have the firmware append <code> alt=&lt;cm&gt;</code> to the IMU line, and set <code>ALT_UNITS</code> in <code>config.BLE</code> to the units it prints.</li></ul></section>
+</div></details>
+<details class="step" id="step-19">
+<summary><input type="checkbox" data-i="19" aria-label="Step 19 done" onclick="event.stopPropagation()"><span class="n">19</span><span class="t">Route and tie down every wire</span></summary>
+<div class="body">
+<section class="need"><h4>You need</h4><ul><li>masking tape, zip ties</li></ul></section>
+<section class="do"><h4>Do</h4><ol><li>Run each motor's leads along the bar or the plate to the driver, taped every 5 cm.</li><li>Extend a lead that does not reach: twist a jumper wire onto it and tape the joint, or have the hardware team solder it.</li><li>Check with the box off: no wire passes within 3 cm of where a prop will spin (behind L and R, right of S, under V). No wire crosses under the V motor.</li><li>Tug every wire gently: nothing moves.</li></ol></section>
+<section class="see"><h4>You should see</h4><ul><li>A tidy gondola: nothing dangles, nothing is near a prop disc.</li></ul></section>
+<section class="ifnot"><h4>If not</h4><ul><li>A lead had to be re-plugged at the breadboard: the letter may have moved. Repeat step 6 for that letter after switching on.</li></ul></section>
+</div></details>
+<details class="step" id="step-20">
+<summary><input type="checkbox" data-i="20" aria-label="Step 20 done" onclick="event.stopPropagation()"><span class="n">20</span><span class="t">Fit the props the right way round</span></summary>
+<div class="body">
+<section class="need"><h4>You need</h4><ul><li>four props: two clockwise, two counter-clockwise (marked A/B or CW/CCW on the hub)</li></ul></section>
+<section class="do"><h4>Do</h4><ol><li>Rule for every prop: the marked (lettered) face of the hub points in the direction the motor must PUSH the gondola; air is blown out the unmarked side.</li><li>L: one CW prop, lettered face toward FRONT (air will blow backward).</li><li>R: one CCW prop, lettered face toward FRONT. L and R must be one of each kind so their twist cancels.</li><li>S: any remaining prop, lettered face toward the plate (pointing LEFT); air will blow out to the right.</li><li>V: the last prop, lettered face UP toward the cork; air will blow down.</li><li>Press each prop straight down onto its shaft until it sits firm. Spin each by hand: it turns freely and touches nothing.</li></ol></section>
+<section class="see"><h4>You should see</h4><ul><li>Four props on, each spinning freely, letters facing front / front / left / up.</li></ul></section>
+<section class="ifnot"><h4>If not</h4><ul><li>A prop hits the bar, the plate or a wire: move the wire, or slide the prop 1 mm further onto the shaft.</li><li>A prop is loose: a drop of hot glue on the hub (not the shaft bearing).</li></ul></section>
+</div></details>
+<details class="step" id="step-21">
+<summary><input type="checkbox" data-i="21" aria-label="Step 21 done" onclick="event.stopPropagation()"><span class="n">21</span><span class="t">Check the air blows the right way and fix the signs</span></summary>
+<div class="body">
+<section class="need"><h4>You need</h4><ul><li>the gondola taped to the table by its plate, a strip of tissue paper, <code>laptop/config.py</code> open</li></ul></section>
+<section class="do"><h4>Do</h4><ol><li>Switch the box on. Hold the tissue 10 cm BEHIND the L prop. Run <code>python -m laptop.control.ble_gondola --motor &lt;L's letter&gt; 30</code>.</li><li>Repeat for R (tissue behind the prop): air must blow BACKWARD.</li><li>S: tissue to the right of its prop: air must blow to the RIGHT (outboard).</li><li>V: tissue below its prop: air must blow DOWN.</li><li>For every motor whose air went the wrong way, open <code>laptop/config.py</code>, find <code>SIGN={"L": 1, "R": 1, "S": 1, "V": 1},</code> in <code>BLE = dict(...)</code> and change that motor's <code>1</code> to <code>-1</code>. Save.</li><li>Re-run the four commands. Now every one blows the right way.</li></ol></section>
+<section class="see"><h4>You should see</h4><ul><li>Tissue blown away from the gondola behind L and R, out to the right of S, down under V, all with a positive percent.</li></ul></section>
+<section class="ifnot"><h4>If not</h4><ul><li>A motor blows the wrong way even after the sign flip: the prop is on upside down (lettered face the wrong way). Turn the prop over, and put the sign back to <code>1</code> if you had flipped it.</li><li>Air is weak at 30 percent: fine, it is about 4 grams of push. Weak at 50 percent with a whine: battery low or the driver drops too much voltage (step 3).</li></ul></section>
+</div></details>
+<details class="step" id="step-22">
+<summary><input type="checkbox" data-i="22" aria-label="Step 22 done" onclick="event.stopPropagation()"><span class="n">22</span><span class="t">Balance the props (optional, five minutes, worth it)</span></summary>
+<div class="body">
+<section class="need"><h4>You need</h4><ul><li>a sewing needle or pin</li></ul></section>
+<section class="do"><h4>Do</h4><ol><li>Pull each prop off, push the pin through the hub hole, hold the pin level and let the prop settle.</li><li>If one blade always drops, sand that blade's tip lightly with a fingernail file and try again, until it stays in any position.</li><li>Put the prop back the same way round as in step 20.</li></ol></section>
+<section class="see"><h4>You should see</h4><ul><li>Each prop stays where you leave it on the pin.</li></ul></section>
+<section class="ifnot"><h4>If not</h4><ul><li>No time: skip. Unbalanced props buzz and shake the IMU; the software copes, the sound suffers.</li></ul></section>
+</div></details>
+<details class="step" id="step-23">
+<summary><input type="checkbox" data-i="23" aria-label="Step 23 done" onclick="event.stopPropagation()"><span class="n">23</span><span class="t">Tie the bridle and the clip</span></summary>
+<div class="body">
+<section class="need"><h4>You need</h4><ul><li>the three 25 cm strings, the mini carabiner</li></ul></section>
+<section class="do"><h4>Do</h4><ol><li>Tie one string through the front hole, one through the rear-left hole, one through the rear-right hole. Double knots.</li><li>Gather the three free ends and tie them to the carabiner so that the plate hangs 10-12 cm below the carabiner. Do not cut the spare string yet.</li><li>Hang the gondola from a finger through the carabiner. Look from the front and from the side.</li><li>Not level? Re-tie the string on the LOW side a little shorter. Repeat until the plate is level both ways.</li><li>Check the rear strings run in FRONT of the L and R prop discs and at least 3 cm from them. Then cut the spare ends and dab the knots with hot glue.</li></ol></section>
+<section class="see"><h4>You should see</h4><ul><li>The gondola hangs level from the clip, 10-12 cm below it, strings clear of every prop.</li></ul></section>
+<section class="ifnot"><h4>If not</h4><ul><li>It always tips to the left: the battery side is heavy; that is what the shorter string is for. Still tipping: move the battery 1 cm toward the centre.</li></ul></section>
+</div></details>
+<details class="step" id="step-24">
+<summary><input type="checkbox" data-i="24" aria-label="Step 24 done" onclick="event.stopPropagation()"><span class="n">24</span><span class="t">Full teleop on the bench, tied down</span></summary>
+<div class="body">
+<section class="need"><h4>You need</h4><ul><li>the gondola taped to the table by the plate edges, props clear of the table</li><li>two PowerShell windows</li></ul></section>
+<section class="do"><h4>Do</h4><ol><li>Window 1: <code>python -m laptop.control.ble_gondola</code>. Window 2: <code>python -m laptop.control.teleop</code>.</li><li>Hands off for 3 seconds. SPACE.</li><li><code>w</code> <code>w</code> <code>w</code> (30 percent): L and R both blow backward. <code>x</code>.</li><li><code>s</code> <code>s</code> <code>s</code>: both blow forward. <code>x</code>.</li><li><code>j</code> <code>j</code> <code>j</code>: S blows to the right. <code>x</code>. <code>l</code> <code>l</code> <code>l</code>: S blows to the left. <code>x</code>.</li><li><code>q</code> <code>q</code> <code>q</code>: V blows down. <code>x</code>. <code>e</code> <code>e</code> <code>e</code>: V blows up. <code>x</code>.</li><li><code>a</code> <code>a</code> <code>a</code>: window 1 shows R's letter larger than L's (a turn to the left). <code>x</code>.</li><li>SPACE to disarm. Leave both windows open.</li></ol></section>
+<section class="see"><h4>You should see</h4><ul><li>Every key moves exactly the motors the plan says, in the direction it says. The bridge line stays <code>BLE ARMED</code> throughout with <code>imu</code> near 20 Hz.</li></ul></section>
+<section class="ifnot"><h4>If not</h4><ul><li><code>a</code> makes L larger than R: the map is mirrored; swap the L and R letters in <code>MOTORS</code> and repeat step 9 onward.</li><li>The bridge drops to <code>no link</code> during the run: Bluetooth range or interference. Move phones away, stay within 3 m. It reconnects by itself; note it for the hardware team.</li></ul></section>
+</div></details>
+<details class="step" id="step-25">
+<summary><input type="checkbox" data-i="25" aria-label="Step 25 done" onclick="event.stopPropagation()"><span class="n">25</span><span class="t">Failsafe, twice</span></summary>
+<div class="body">
+<section class="need"><h4>You need</h4><ul><li>the same two windows, the gondola still tied down</li></ul></section>
+<section class="do"><h4>Do</h4><ol><li>Arm with SPACE and press <code>w</code> twice. Motors run.</li><li>Press Ctrl+C in window 2 (teleop). Count: the motors must stop within half a second and window 1 prints <code>MOTORS OFF (arm=0 ...)</code>.</li><li>Restart teleop, arm, <code>w</code> twice again.</li><li>Now kill the BRIDGE the hard way: open Task Manager, end the <code>python</code> process of window 1 (or close its window). Watch the motors.</li><li>Switch the box off with the switch if the motors are still running after two seconds.</li></ol></section>
+<section class="see"><h4>You should see</h4><ul><li>Test 1: motors off within half a second of Ctrl+C.</li><li>Test 2: motors off within about half a second on their own (the firmware timeout works), or you switched them off by hand.</li></ul></section>
+<section class="ifnot"><h4>If not</h4><ul><li>Test 2 kept the motors running: the firmware has no timeout yet. Tell the hardware team (STOP after 500 ms without a command). Until then rule 2 is law: a person on the switch whenever it flies.</li></ul></section>
+</div></details>
+<details class="step" id="step-26">
+<summary><input type="checkbox" data-i="26" aria-label="Step 26 done" onclick="event.stopPropagation()"><span class="n">26</span><span class="t">Weigh the gondola and pick the balloon size</span></summary>
+<div class="body">
+<section class="need"><h4>You need</h4><ul><li>the kitchen scale</li></ul></section>
+<section class="do"><h4>Do</h4><ol><li>Put the complete gondola (battery, props, bridle, clip) on the scale. Read grams.</li><li>Write it in <code>calib/MEASUREMENTS.md</code>: <code>| date | gondola, complete, before ballast | NNN g | PHYS M_GONDOLA | |</code>.</li><li>In <code>laptop/config.py</code> set <code>M_GONDOLA=</code> to the weight in kilograms (320 g = <code>0.32</code>).</li><li>Measure the distance between the L and R shafts with the ruler. Write <code>MOTOR_SPACING=</code> in metres (25 cm = <code>0.25</code>) and log it too.</li><li>Decide the balloon size: under 450 g -&gt; inflate to 1.10 m (tape marks 110 cm apart). 450-700 g -&gt; inflate to 1.22 m (marks 122 cm apart) and set <code>D=1.22</code>. Over 700 g -&gt; stop and cut weight first.</li></ol></section>
+<section class="see"><h4>You should see</h4><ul><li>A weight in grams, a spacing in metres, both in the config and in MEASUREMENTS.md, and a target diameter.</li></ul></section>
+<section class="ifnot"><h4>If not</h4><ul><li>Over 700 g: the usual culprits are a full-size breadboard (85 g), two L298N boards (55 g) and a second battery. Swap or remove before inflating; helium is not free.</li></ul></section>
+</div></details>
+<div class="phase">Phase C. The balloon</div>
+<details class="step" id="step-27">
+<summary><input type="checkbox" data-i="27" aria-label="Step 27 done" onclick="event.stopPropagation()"><span class="n">27</span><span class="t">Mark the target size</span></summary>
+<div class="body">
+<section class="need"><h4>You need</h4><ul><li>masking tape, the tape measure, a bare wall</li></ul></section>
+<section class="do"><h4>Do</h4><ol><li>Stick two small pieces of tape on the wall at about eye height, exactly 110 cm apart (or 122 cm if step 26 said so). These are the size gauge.</li><li>Clear the floor under them: no rough edges, nothing sharp.</li></ol></section>
+<section class="see"><h4>You should see</h4><ul><li>Two marks at the chosen distance.</li></ul></section>
+<section class="ifnot"><h4>If not</h4><ul><li>No wall: two chairs 110 cm apart, back to back, work as the gauge.</li></ul></section>
+</div></details>
+<details class="step" id="step-28">
+<summary><input type="checkbox" data-i="28" aria-label="Step 28 done" onclick="event.stopPropagation()"><span class="n">28</span><span class="t">Inflate and tie</span></summary>
+<div class="body">
+<section class="need"><h4>You need</h4><ul><li>the balloon, the helium, zip ties, a second person</li></ul></section>
+<section class="do"><h4>Do</h4><ol><li>Inflate slowly. Stop every 20 seconds and hold the balloon in front of the marks, at eye height, looking straight on: it is done when its sides just reach both marks.</li><li>Twist the neck three times, fold the twisted part over, and lock the fold with a zip tie pulled tight.</li><li>Thread a second zip tie through the KEYRING, then around the neck right next to the first one, and pull it tight: the ring is now captured on the neck. Cut both tails.</li></ol></section>
+<section class="see"><h4>You should see</h4><ul><li>A balloon spanning the two marks, a locked neck, a keyring hanging from it. It rises on its own when let go (catch the ring).</li></ul></section>
+<section class="ifnot"><h4>If not</h4><ul><li>It does not rise, or barely: not enough helium in it (a party blend lifts less). Inflate toward 122 cm and set <code>D=1.22</code>.</li><li>The neck leaks (hissing): another zip tie, tighter, further up the neck.</li></ul></section>
+</div></details>
+<details class="step" id="step-29">
+<summary><input type="checkbox" data-i="29" aria-label="Step 29 done" onclick="event.stopPropagation()"><span class="n">29</span><span class="t">Clip the gondola on</span></summary>
+<div class="body">
+<section class="need"><h4>You need</h4><ul><li>the balloon, the gondola, the second person holding the balloon by the neck</li></ul></section>
+<section class="do"><h4>Do</h4><ol><li>Clip the carabiner into the keyring.</li><li>Let go gently while holding the plate level; steady it; let go completely.</li><li>Look from the front and the side: the plate hangs level, the props are at least 5 cm from the balloon's skin, the strings touch nothing.</li></ol></section>
+<section class="see"><h4>You should see</h4><ul><li>The balloon lifts the gondola (it rises slowly or hangs in the air). Level plate, clear props.</li></ul></section>
+<section class="ifnot"><h4>If not</h4><ul><li>It sinks straight down: the gondola is heavier than the lift. Inflate more (up to 122 cm) or cut weight.</li><li>A prop tip is closer than 5 cm to the skin: lengthen all three bridle strings by the same amount (re-tie at the carabiner), then re-level as in step 23.</li><li>It hangs nose-down or nose-up: shorten the string on the low side.</li></ul></section>
+</div></details>
+<details class="step" id="step-30">
+<summary><input type="checkbox" data-i="30" aria-label="Step 30 done" onclick="event.stopPropagation()"><span class="n">30</span><span class="t">Trim it one gram heavy</span></summary>
+<div class="body">
+<section class="need"><h4>You need</h4><ul><li>coins, blu-tack, tape, a room with the doors closed and no fan</li></ul></section>
+<section class="do"><h4>Do</h4><ol><li>Hold the balloon still at chest height and let go, motors off. Count seconds until the gondola touches the floor.</li><li>Rises or floats without sinking: tape a dime (1.75 g) at the plate's centre dot and try again. Repeat, with dimes for coarse steps and pinches of blu-tack for fine ones.</li><li>Sinks in under 5 seconds: take weight off.</li><li>Target: touches down 5 to 10 seconds after release, from chest height.</li></ol></section>
+<section class="see"><h4>You should see</h4><ul><li>Released at chest height it drifts down and touches the floor after 5-10 seconds. It feels too heavy; it is not: that is about one gram, and the vertical motor lifts twelve.</li></ul></section>
+<section class="ifnot"><h4>If not</h4><ul><li>It behaves differently on each try: air is moving. Close doors, turn the HVAC off in that room if you can, wait a minute.</li><li>The balloon shrinks over the day (helium leaks): trim again before the demo.</li></ul></section>
+</div></details>
+<details class="step" id="step-31">
+<summary><input type="checkbox" data-i="31" aria-label="Step 31 done" onclick="event.stopPropagation()"><span class="n">31</span><span class="t">Measure the hang and finish the config</span></summary>
+<div class="body">
+<section class="need"><h4>You need</h4><ul><li>the tape measure, a helper to steady the balloon</li><li><code>laptop/config.py</code> and <code>calib/MEASUREMENTS.md</code> open</li></ul></section>
+<section class="do"><h4>Do</h4><ol><li>Stand the balloon so the gondola rests on the floor and the balloon is upright (a helper steadies the top).</li><li>Measure floor to the widest point of the balloon (the equator): E. Measure floor to the motor bar: M.</li><li><code>ARM_BELOW</code> = E minus M. Measure the balloon's diameter D against the wall marks (or tape across the widest point, or circumference divided by 3.14).</li><li>In <code>laptop/config.py</code> <code>PHYS = dict(...)</code>: set <code>D=</code> and <code>ARM_BELOW=</code> (metres); leave <code>TOF_BELOW</code> alone (no ultrasonic on this box). <code>M_GONDOLA</code> and <code>MOTOR_SPACING</code> are already there from step 26.</li><li>Log every number with today's date in <code>calib/MEASUREMENTS.md</code>.</li><li>Run <code>python tools/scenarios.py --seeds 3</code> and <code>python tools/control_test.py</code>.</li></ol></section>
+<section class="see"><h4>You should see</h4><ul><li><code>ALL PASS</code> from the scenarios (about a minute) and <code>PASS</code> from the control test.</li></ul></section>
+<section class="ifnot"><h4>If not</h4><ul><li>A scenario fails with the new numbers: paste the table to the software side; a gain may need tuning for a heavier gondola. Hover-only flying (step 39) is still allowed; following waits for the fix.</li></ul></section>
+</div></details>
+<div class="phase">Phase D. The room and the first flight</div>
+<details class="step" id="step-32">
+<summary><input type="checkbox" data-i="32" aria-label="Step 32 done" onclick="event.stopPropagation()"><span class="n">32</span><span class="t">Set up the room</span></summary>
+<div class="body">
+<section class="need"><h4>You need</h4><ul><li>a space at least 3 x 4 m with a ceiling of 2.5 m or more, no vent or open door blowing across it</li><li>the mat board, a table, the laptop</li></ul></section>
+<section class="do"><h4>Do</h4><ol><li>Put the table at one edge of the space. The laptop on it, lid open, webcam facing the space, 0.8-1.0 m above the floor.</li><li>Lay the mat board flat on the floor 2-3 m in front of the laptop, tags up, straight, the way it was surveyed.</li><li>Look at the space through the webcam (Windows Camera app, then close it): the whole mat is in the lower half of the picture and there is room above for a balloon 3-5 m away up to 2.3 m high. Tilt the lid until both are true.</li><li>Close the Camera app. Nothing else may hold the webcam.</li></ol></section>
+<section class="see"><h4>You should see</h4><ul><li>Mat in the lower half of the frame, headroom in the upper half, no vents.</li></ul></section>
+<section class="ifnot"><h4>If not</h4><ul><li>Only a low table: the balloon's top gets cut off. Use a higher table or a stack of boxes; the mat can move closer.</li></ul></section>
+</div></details>
+<details class="step" id="step-33">
+<summary><input type="checkbox" data-i="33" aria-label="Step 33 done" onclick="event.stopPropagation()"><span class="n">33</span><span class="t">Start the room camera</span></summary>
+<div class="body">
+<section class="need"><h4>You need</h4><ul><li>window 1 in the repo</li></ul></section>
+<section class="do"><h4>Do</h4><ol><li>Run <code>python -m laptop.vision.mono --auto-calib --show</code>.</li><li>Hands off the laptop and nobody in front of the mat for 3 seconds.</li></ol></section>
+<section class="see"><h4>You should see</h4><ul><li><code>[auto-calib] camera laptop at world X=... Y=... Z=...  4 tags  reproj 0.xx px  spread x.x cm</code>, with Z within 10 cm of the table height.</li><li>A window titled <code>cam laptop</code> shows the picture. A status line prints once a second: <code>[mono] 15 Hz ... tag drift px=1.2</code>.</li></ul></section>
+<section class="ifnot"><h4>If not</h4><ul><li><code>mat seen in only N frames</code>: the board is not fully in view, too far, or too dark. Move it closer or add light and run again.</li><li><code>camera position jumped</code>: the lid was moving. Hold still and let it retry (it tries three times).</li><li>Z is wildly off the table height: the mat is not flat, or the board moved since its survey. Flatten it; if a page moved, re-survey (README section 2).</li></ul></section>
+</div></details>
+<details class="step" id="step-34">
+<summary><input type="checkbox" data-i="34" aria-label="Step 34 done" onclick="event.stopPropagation()"><span class="n">34</span><span class="t">Check the camera sees the balloon and a person</span></summary>
+<div class="body">
+<section class="need"><h4>You need</h4><ul><li>the balloon, one person</li></ul></section>
+<section class="do"><h4>Do</h4><ol><li>Hold the balloon by its gondola in the middle of the space, about 1.5 m high, and stand still.</li><li>Look at the <code>cam laptop</code> window and the status line.</li></ol></section>
+<section class="see"><h4>You should see</h4><ul><li>A blue box around the balloon and <code>balloon=[x, y, z]</code> in the status line with z about 1.5 (metres). A green box on the person and <code>person=[x, y, z]</code>.</li><li>Walk a step to the right: <code>x</code> or <code>y</code> changes by about a metre per big step.</li></ul></section>
+<section class="ifnot"><h4>If not</h4><ul><li>No blue box: the detector does not recognise this balloon in this light. Do the 10-minute site fine-tune (README section 2, <code>label_site.py</code> then <code>train_balloon.py --stage site</code>) and restart mono.</li><li>The box jumps between the balloon and a lamp or a head: the same fine-tune fixes it.</li><li><code>person</code> never appears: stand fully in the picture, feet visible; the software needs the feet to know where you are.</li></ul></section>
+</div></details>
+<details class="step" id="step-35">
+<summary><input type="checkbox" data-i="35" aria-label="Step 35 done" onclick="event.stopPropagation()"><span class="n">35</span><span class="t">Bridge and pilot</span></summary>
+<div class="body">
+<section class="need"><h4>You need</h4><ul><li>windows 2 and 3 in the repo, mono still running in window 1</li></ul></section>
+<section class="do"><h4>Do</h4><ol><li>Window 2: <code>python -m laptop.control.ble_gondola</code> (the box switched on).</li><li>Window 3: <code>python -m laptop.control.pilot --no-voice</code>.</li><li>Let the balloon float free in the middle of the space, at least 1 m from every wall, gondola still. Nobody touches it for 3 seconds.</li></ol></section>
+<section class="see"><h4>You should see</h4><ul><li>The pilot's status line shows <code>safe DISARMED ... | (x, y, z) psi=n/a z:cam</code> with real numbers in the brackets, not <code>none</code>.</li><li>Window 2 shows <code>BLE</code>, <code>imu 20 Hz</code>.</li></ul></section>
+<section class="ifnot"><h4>If not</h4><ul><li><code>none</code> in the brackets: mono does not see the balloon (step 34) or is not running.</li><li><code>omni</code> errors or the pilot waits for a key: you started it without <code>--no-voice</code>; use <code>--no-voice</code> for the first flight.</li></ul></section>
+</div></details>
+<details class="step" id="step-36">
+<summary><input type="checkbox" data-i="36" aria-label="Step 36 done" onclick="event.stopPropagation()"><span class="n">36</span><span class="t">First flight: hover</span></summary>
+<div class="body">
+<section class="need"><h4>You need</h4><ul><li>a person on the battery switch (rule 2), everyone else 2 m back</li></ul></section>
+<section class="do"><h4>Do</h4><ol><li>Press SPACE in the pilot window.</li><li>Watch the status line: <code>learning heading: probe axis 0</code>, then <code>commit</code>, <code>brake</code>, <code>next push</code>. The balloon makes a few short pushes for 10-30 seconds.</li><li>Then the note becomes <code>HOVER</code>. Watch it for one full minute.</li><li>To stop at any time: SPACE (motors off, the balloon just floats), or the switch.</li></ol></section>
+<section class="see"><h4>You should see</h4><ul><li>During the minute the balloon stays within about 0.3 m of its spot, with one small wobble every 40 seconds (the heading twitch). Height stays near 1.7 m.</li></ul></section>
+<section class="ifnot"><h4>If not</h4><ul><li>The laptop says <code>I need more room to learn which way I'm facing</code>: it is too close to a wall. SPACE to disarm, move it to the middle, arm again.</li><li><code>BALLOON LOST -&gt; disarm</code>: the camera lost it for 1.5 s. Better light, or the balloon left the picture. Move it back in view and arm again.</li><li>It drifts steadily in one direction: a draught. Close doors; it is not a bug.</li><li>It spins up instead of holding still: the yaw sign is wrong. SPACE immediately. Redo step 5 (<code>GYRO_SIGN</code>) and step 21.</li><li>It climbs to the ceiling or sinks to the floor: the vertical sign is wrong (step 21, V) or the trim is far off (step 30).</li></ul></section>
+</div></details>
+<details class="step" id="step-37">
+<summary><input type="checkbox" data-i="37" aria-label="Step 37 done" onclick="event.stopPropagation()"><span class="n">37</span><span class="t">Follow me</span></summary>
+<div class="body">
+<section class="need"><h4>You need</h4><ul><li>the same three windows, the balloon hovering</li></ul></section>
+<section class="do"><h4>Do</h4><ol><li>In the pilot window press <code>t</code>, type <code>follow_me</code>, press Enter.</li><li>Stand 2 m from the balloon, fully in the camera's view, and stay still for 10 seconds.</li><li>Walk slowly, one step every two seconds, in a circle around the space, never closer than 1 m to the balloon.</li><li>Press <code>t</code>, type <code>hover</code>, Enter, to stop following.</li></ol></section>
+<section class="see"><h4>You should see</h4><ul><li>The note shows <code>FOLLOW d=1.5</code> or close. The balloon turns to face you, keeps about 1.5 m from you, and comes along as you walk.</li></ul></section>
+<section class="ifnot"><h4>If not</h4><ul><li>It follows the wrong person: it takes the largest person in the picture. Others step out of view.</li><li>It overshoots and swings back: expected for the first minutes while the heading settles; if it does not calm down in a minute, paste the pilot's log to the software side.</li></ul></section>
+</div></details>
+<details class="step" id="step-38">
+<summary><input type="checkbox" data-i="38" aria-label="Step 38 done" onclick="event.stopPropagation()"><span class="n">38</span><span class="t">Voice</span></summary>
+<div class="body">
+<section class="need"><h4>You need</h4><ul><li>the OMNI key in the environment (<code>YIBU_API_KEY</code>), or Ollama running for the local voice</li></ul></section>
+<section class="do"><h4>Do</h4><ol><li>Press ESC in the pilot. Restart it as <code>python -m laptop.control.pilot</code> (cloud voice) or <code>python -m laptop.control.pilot --voice local</code> (offline, <code>v</code> for push-to-talk).</li><li>SPACE to arm. Say: <code>Blimpy, follow me.</code> Then: <code>Blimpy, stop.</code></li></ol></section>
+<section class="see"><h4>You should see</h4><ul><li>It answers out loud, the note changes to <code>FOLLOW</code>, then to <code>HOVER</code> on <code>stop</code>.</li></ul></section>
+<section class="ifnot"><h4>If not</h4><ul><li>It answers but does not move: the command safety net should catch <code>follow me</code>; if the note never changes, paste the <code>[omni]</code> lines to the software side.</li><li>Nothing heard: <code>python -m laptop.voice.omni --meter</code> shows whether the mic opens when you talk; AirPods need <code>--mic AirPods --spk Speakers</code>.</li></ul></section>
+</div></details>
+<p class="foot">38 steps. Ticks are saved in this browser only. Every number measured along the way lives in <code>laptop/config.py</code> (PHYS, BLE) and <code>calib/MEASUREMENTS.md</code>.</p>
+</main>
+<script>
+  const KEY = 'blimpy-build-steps-v1';
+  let done = {};
+  try { done = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (e) { done = {}; }
+  const boxes = [...document.querySelectorAll('.step input')];
+  const fill = document.querySelector('.bar > i'), label = document.querySelector('.progress .count');
+  function paint() {
+    let n = 0;
+    for (const b of boxes) { const d = !!done[b.dataset.i]; b.checked = d; b.closest('.step').classList.toggle('done', d); n += d; }
+    fill.style.width = (100 * n / boxes.length) + '%';
+    label.textContent = n + ' of ' + boxes.length + ' steps done';
+  }
+  for (const b of boxes) b.addEventListener('change', () => {
+    done[b.dataset.i] = b.checked; try { localStorage.setItem(KEY, JSON.stringify(done)); } catch (e) {}
+    paint();
+    if (b.checked) { const d = b.closest('details'); d.open = false; const nx = d.nextElementSibling; if (nx && nx.matches('details')) { nx.open = true; } }
+  });
+  document.querySelector('.progress .reset').addEventListener('click', () => { done = {}; try { localStorage.removeItem(KEY); } catch (e) {} paint(); });
+  document.querySelector('.progress .all').addEventListener('click', () => { for (const d of document.querySelectorAll('details')) d.open = true; });
+  paint();
+</script>
