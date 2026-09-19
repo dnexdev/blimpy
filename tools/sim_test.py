@@ -1,6 +1,7 @@
 """Headless regression test of the control stack over the real UDP protocol (no hardware, no keyboard).
 
-  python tools/sim_test.py
+  python tools/sim_test.py          # over fake_esp32 (UDP board)
+  python tools/sim_test.py --ble    # over the BLE bridge + simulated robot (laptop/control/ble_gondola.py --fake --sim)
 
 (1) Failsafe: arm + drive for 1.5 s, stop sending, measure time until telemetry reports armed=0 (must be ~500 ms).
 (2) Follow-me vs a walking person for 45 s: heading nudge, then hold distance/heading. Reports tracking stats.
@@ -18,10 +19,13 @@ G = config.FOLLOW
 LOCAL = ("127.0.0.1", CMD_PORT)
 
 
+BLE = "--ble" in sys.argv          # run the same checks through the BLE bridge on its simulated robot (ble_gondola --fake --sim)
+
+
 def start_fake(*extra):
-    p = subprocess.Popen([sys.executable, "-m", "laptop.control.fake_esp32", "--sim", *extra],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    time.sleep(1.0)
+    mod = ["laptop.control.ble_gondola", "--fake", "--sim", "--no-http"] if BLE else ["laptop.control.fake_esp32", "--sim"]
+    p = subprocess.Popen([sys.executable, "-m", *mod, *extra], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(1.5 if BLE else 1.0)
     return p
 
 
