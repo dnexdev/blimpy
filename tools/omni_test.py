@@ -47,8 +47,7 @@ def check(name, ok, detail=""):
 
 
 mock = Mock(script=[{"tool": {"intent": "rotate", "degrees": -90, "target": None}},
-                    {"text": "long story", "audio_chunks": 40, "chunk_ms": 100},
-                    {"heard": "Blimpy, stop.", "text": "Mm-hm.", "audio_chunks": 2}])
+                    {"text": "long story", "audio_chunks": 40, "chunk_ms": 100}])
 th, stop = mock.serve_in_thread(PORT)
 intents = []
 spk = FakeSpeaker()
@@ -123,9 +122,11 @@ check("reconnects after drop", wait_for(lambda: mock.stats["sessions"] >= 2 and 
       f"sessions {mock.stats['sessions']} ok={om.ok} err={om.last_error}")
 
 # 9. a spoken "stop" acts locally from the transcription even when the model only says "Mm-hm."
+mock.script.append({"heard": "Blimpy, stop.", "text": "Mm-hm.", "audio_chunks": 2})
 n_int = len(intents); talk(om, 40)
 check("spoken stop -> hover from the transcription (model said only Mm-hm.)",
-      wait_for(lambda: len(intents) > n_int, 3) and intents[-1] == {"intent": "hover"} and om.stats.get("local_stops") == 1, str(intents[n_int:]))
+      wait_for(lambda: len(intents) > n_int, 3) and intents[-1] == {"intent": "hover"} and om.stats.get("local_stops") == 1,
+      f"{intents[n_int:]} heard {om.transcript[-2:]} sessions {mock.stats['sessions']} appends {mock.stats['audio_appends']} ok={om.ok} err={om.last_error}")
 
 om.stop(); stop()
 n_fail = sum(not v for v in results.values())

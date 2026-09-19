@@ -64,15 +64,28 @@ Rules:
 - Messages starting with [EVENT] come from your own sensors and timers, not from the user: say them to the user in
   your own words, briefly. Never call a tool for an [EVENT].
 - If the user interrupts you mid-sentence, what they said is for you: act on it (a command -> set_intent, a question
-  -> answer). "Stop", "hold", "hover", "halt" always mean set_intent hover, also right after an interruption.
+  -> answer) and NEVER resume or repeat what you were saying. "Stop", "hold", "hover", "halt" always mean set_intent
+  hover, also right after an interruption.
 - If speech is clearly not addressed to you (people talking to each other, noise), reply with a single short "Mm-hm."
   at most. Anything that starts with "Blimpy" IS addressed to you.
 - Never invent robot abilities you were not given. You cannot pick things up or leave the room."""
 
-# Safety net, independent of the model: a spoken stop acts the moment its transcription arrives (seen live: after a
-# barge-in the model once answered "Blimpy, stop and hover." with "Mm-hm." and no tool call). Anchored to the start of
-# the utterance so "don't stop" and "stop following me" do the right thing.
-STOP_RE = re.compile(r"^\W*(?:(?:hey|ok|okay|please)\W+)?(?:blimpy\W+)?(?:please\W+)?(?:stop|halt|freeze|hold still|hover)\b", re.I)
+# Safety net, independent of the model: a spoken stop acts the moment its transcription arrives (seen live: spoken over
+# Blimpy talking, "Blimpy, stop and hover." was transcribed right but answered with "Mm-hm." or a resumed story and no
+# tool call; the ASR also wrote "Blippi", so the name is not required). A stop word within the first words, not negated,
+# not "stop by" / "a stop sign".
+STOP_WORDS = ("stop", "halt", "freeze", "hover")
+NEG_WORDS = ("don't", "dont", "do", "not", "never", "no", "didn't", "won't", "a", "the", "what", "what's")
+
+
+def is_stop(text):
+    words = re.findall(r"[a-z']+", (text or "").lower())[:8]
+    for i, w in enumerate(words):
+        hold = w == "hold" and i + 1 < len(words) and words[i + 1] in ("still", "position", "it", "there", "here")
+        if w in STOP_WORDS or hold:
+            nxt = words[i + 1] if i + 1 < len(words) else ""
+            return not any(p in NEG_WORDS for p in words[:i]) and nxt not in ("by", "sign", "signs", "watch", "light", "lights")
+    return False
 
 # session.update payload. Verified live: "pcm" (16 kHz in, 24 kHz out) is what the relay wants; OMNI_AUDIO_FMT still
 # overrides it. The server adds input_audio_transcription (qwen3-asr-flash-realtime) itself.
@@ -260,7 +273,7 @@ class OmniLive:
         elif t == "conversation.item.input_audio_transcription.completed":
             txt = ev.get("transcript") or ""
             if txt: self.transcript.append(("you", txt)); self._log("you", txt)
-            if STOP_RE.match(txt):                        # local stop: hover now, whether or not the model calls the tool
+            if is_stop(txt):                              # local stop: hover now, whether or not the model calls the tool
                 self.stats["local_stops"] = self.stats.get("local_stops", 0) + 1
                 try: self.on_intent({"intent": "hover"})
                 except Exception as e: self.last_error = f"local stop: {e}"
