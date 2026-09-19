@@ -23,7 +23,7 @@ tools/               scenarios.py · sim_test.py (--ble) · ble_test.py · behav
                      webcam_test.py · balloon_eval.py · vision_check.py (go/no-go) · positioning_eval.py (sessions vs truth)
 calib/               <name>_intrinsics.npz (once) and <name>_extrinsics.npz (every placement)
 venues/              default.json: the room (arena, obstacles, places). Committed; config.py exports it as ARENA / OBSTACLES / JUDGES_XY
-docs/                BUILD_STEPS.md: build it, one step at a time (38 steps, from the finished breadboard to the first flight) · ROBOT_BUILD.md: the design behind
+docs/                BUILD_STEPS.md: build it, one step at a time (36 steps in three phases: H = the hardware team's motor box, S = everything the software people do meanwhile with no motors, J = the join and first flight) · ROBOT_BUILD.md: the design behind
                      the steps (what the code assumes: balloon, gondola, motors, hang, room) · build_blueprint.html / build_steps.html: the same two with drawings and checkboxes
 data/positioning/    recorded sessions (gitignored): <ts>_<tag>[_name]/session.json + log.jsonl
 ```
@@ -485,8 +485,9 @@ rpicam-vid -t 0 --width 1280 --height 720 --framerate 30 --codec h264 --inline -
 
 ## 3. Real gondola — bench checklist (in this order)
 
-**Building the airframe?** [docs/BUILD_STEPS.md](docs/BUILD_STEPS.md) is the procedure: 38 steps from the finished breadboard to the
-first flight, each with what you need, what to do, what you should see and what to do if not. [docs/ROBOT_BUILD.md](docs/ROBOT_BUILD.md)
+**Building the airframe?** [docs/BUILD_STEPS.md](docs/BUILD_STEPS.md) is the procedure: 36 steps in three phases (H = the hardware team's motor box, S = everything the
+software people do meanwhile with no motors, J = the join and first flight), each with what you need, what to do, what
+you should see and what to do if not. [docs/ROBOT_BUILD.md](docs/ROBOT_BUILD.md)
 is the design behind it (balloon size, motor layout, IMU orientation, the clip, weight budget); `docs/build_blueprint.html` and
 `docs/build_steps.html` are the same two with drawings and checkboxes.
 
