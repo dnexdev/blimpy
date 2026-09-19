@@ -93,6 +93,9 @@ class BleakTransport(Transport):
                             await client.write_gatt_char(B["COMMAND_UUID"], text.encode(), response=False)
                         except Exception as e:
                             self.last_error = f"write: {e}"; break
+                    if not lost.is_set():                      # leaving on purpose (close()): the firmware keeps the last percentages,
+                        try: await client.write_gatt_char(B["COMMAND_UUID"], b"STOP", response=False)   # so the last word on the link is STOP
+                        except Exception: pass
             except Exception as e:
                 self.last_error = f"{e.__class__.__name__}: {e}"; self.log(f"[ble] {self.last_error}")
             finally:
@@ -338,10 +341,13 @@ def main():
         if not tr.connected: raise SystemExit("[ble] could not connect")
         if args.motor:
             letter, pct = args.motor[0].upper(), int(args.motor[1])
-            print(f"[ble] {letter} {pct} for 2 s"); tr.send(f"{letter} {pct}"); time.sleep(2.0); tr.send("STOP"); print("[ble] STOP")
+            try:
+                print(f"[ble] {letter} {pct} for 2 s"); tr.send(f"{letter} {pct}"); time.sleep(2.0)
+            finally:                                           # Ctrl+C included; and wait for the write: the BLE thread is a daemon,
+                tr.send("STOP"); time.sleep(0.5); print("[ble] STOP")   # leaving at once could exit before STOP is on the air
         else:
             time.sleep(10.0)
-        tr.close(); return
+        tr.close(); time.sleep(0.5); return
 
     br = Bridge(tr, http_port=None if args.no_http else B["HTTP_PORT"])
     print(f"[bridge] udp {CMD_PORT} -> {'simulated robot' if args.fake else 'BLE ' + (args.name or B['NAME'])} -> telemetry on {TELEM_PORT}"
