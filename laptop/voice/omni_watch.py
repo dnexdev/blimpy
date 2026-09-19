@@ -5,7 +5,9 @@ user is doing -> {"present", "working", "activity", "phone"}. behaviors.py turns
   python -m laptop.voice.omni_watch --image me.jpg
 
 Cheap (qwen3.5-omni-flash, one small JPEG + ~60 output tokens per look) and independent of the realtime session, so the
-nag still works if the websocket is down. Env: OMNI_API_KEY, OMNI_HTTP (default https://yibuapi.com/v1),
+nag still works if the websocket is down. Model chosen live on the relay: flash answers in 1.2-1.4 s with valid JSON every
+time; qwen3.5-omni-plus is as accurate but 1.4-3.4 s; qwen3.8-omni-flash took 3-7 s and was inconsistent. The prompt says
+"close to the camera" because a hackathon hall always has people in the background. Env: OMNI_API_KEY, OMNI_HTTP (default https://yibuapi.com/v1),
 OMNI_WATCH_MODEL (default qwen3.5-omni-flash).
 """
 import json, os, re, threading, time
@@ -15,10 +17,11 @@ HTTP = os.environ.get("OMNI_HTTP", "https://yibuapi.com/v1")
 WATCH_MODEL = os.environ.get("OMNI_WATCH_MODEL", "qwen3.5-omni-flash")
 API_KEY = os.environ.get("OMNI_API_KEY") or os.environ.get("YIBU_API_KEY")
 
-PROMPT = """You are the eyes of a study-buddy robot. Look at the frame and answer with ONE JSON object only:
-{"present": true/false (is a person in the frame), "working": true/false (are they working: reading, writing, typing,
-looking at a screen or notes), "phone": true/false (holding or looking at a phone), "activity": "<= 8 words describing
-what the person is doing"}. No other text."""
+PROMPT = """You are the eyes of a study-buddy robot sitting on a desk. Look at the frame and answer with ONE JSON object only:
+{"present": true/false (someone is sitting close to the camera at THIS desk; people far away, in the background or behind
+glass do NOT count), "working": true/false (only if present: reading, writing, typing, looking at a screen or notes),
+"phone": true/false (only if present: holding or looking at a phone), "activity": "<= 8 words: what the nearest person is
+doing, or what the scene is if nobody is close"}. No other text."""
 
 
 def ask(frame_b64, model=None, key=None, prompt=PROMPT, purpose="focus_watch", timeout=20):
@@ -29,11 +32,11 @@ def ask(frame_b64, model=None, key=None, prompt=PROMPT, purpose="focus_watch", t
             "messages": [{"role": "user", "content": [
                 {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{frame_b64}"}},
                 {"type": "text", "text": prompt}]}]}
-    t0 = time.monotonic(); usage = None; err = None; rep = None
+    t0 = time.monotonic(); usage = None; err = None; rep = None; status = None
     try:
         r = requests.post(f"{HTTP}/chat/completions", json=body, timeout=timeout,
                           headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
-        d = r.json(); usage = d.get("usage")
+        status = r.status_code; d = r.json(); usage = d.get("usage")
         if r.status_code != 200: err = f"http {r.status_code}: {str(d.get('error', d))[:200]}"
         else:
             txt = d["choices"][0]["message"].get("content") or ""
@@ -42,8 +45,8 @@ def ask(frame_b64, model=None, key=None, prompt=PROMPT, purpose="focus_watch", t
             if rep is None: err = f"no json in {txt[:80]!r}"
     except Exception as e:
         err = f"{e.__class__.__name__}: {e}"
-    usage_log.record(model, key, purpose, "/v1/chat/completions", "http", err is None,
-                     (time.monotonic() - t0) * 1000, usage, err)
+    usage_log.record(model, key, purpose, f"{HTTP}/chat/completions", "http", err is None,
+                     (time.monotonic() - t0) * 1000, usage, err, status_code=status)
     return rep, err
 
 

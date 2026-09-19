@@ -2,7 +2,8 @@
 
   python tools/omni_test.py
 
-Checks: session.update carries the set_intent tool; mic packets and 1 fps frames reach the server; a tool call reaches
+Checks: session.update carries the set_intent tool; frames are held back until the first mic packet (the relay refuses
+them before audio), then mic packets and frames reach the server; a tool call reaches
 on_intent and its result goes back as function_call_output + response.create; the reply audio reaches the speaker;
 say() injects an [EVENT] turn; barge-in flushes playback; half-duplex drops mic packets while Blimpy talks; usage rows
 land in the ledger; the client reconnects after the server drops it.
@@ -62,9 +63,14 @@ su = mock.stats["session_updates"][0]
 check("session.update has set_intent tool", su.get("tools") and su["tools"][0]["name"] == "set_intent", str(su.get("modalities")))
 check("session.update has VAD + audio formats", su.get("turn_detection") and su.get("input_audio_format"), str(su.get("turn_detection")))
 
-# 2. frames at fps
+# 2. frames wait for audio, then stream at fps
+time.sleep(1.0)
+check("no frames before the first mic packet", om.stats["img_out"] == 0 and mock.stats["images"] == 0 and mock.stats["images_refused"] == 0,
+      f"sent {om.stats['img_out']} refused {mock.stats['images_refused']}")
+talk(om, 3)
 time.sleep(1.3)
-check("frames stream (~4 fps)", 3 <= mock.stats["images"] <= 8, f"{mock.stats['images']} images in 1.3 s")
+check("frames stream (~4 fps) once audio has been appended", 3 <= mock.stats["images"] <= 8 and mock.stats["images_refused"] == 0,
+      f"{mock.stats['images']} images in 1.3 s, refused {mock.stats['images_refused']}")
 b64 = omni.encode_jpeg(frame)
 check("jpeg under provider cap", len(b64) <= omni.JPEG_MAX_B, f"{len(b64)} chars")
 
@@ -72,6 +78,7 @@ check("jpeg under provider cap", len(b64) <= omni.JPEG_MAX_B, f"{len(b64)} chars
 talk(om, 40)
 check("tool call reached on_intent", wait_for(lambda: len(intents) == 1) and intents[0] == {"intent": "rotate", "degrees": -90},
       str(intents))
+check("input transcription reaches the transcript", wait_for(lambda: ("you", "mock transcript") in om.transcript, 3))
 ok = wait_for(lambda: mock.stats["tool_outputs"])
 out = json.loads(mock.stats["tool_outputs"][0]["output"]) if ok else {}
 check("function_call_output returned", ok and out.get("result") == "turning right", str(out))
@@ -99,9 +106,15 @@ check("half-duplex drops mic while speaking", om.stats["audio_in"] == a0)
 # 7. ledger
 wait_for(lambda: om.stats["responses"] >= 3, 5)
 rows = [json.loads(l) for l in open(ledger)] if os.path.exists(ledger) else []
-check("usage ledger rows", len(rows) >= 3 and rows[0]["key_suffix"] == "...1234" and rows[0]["input_tokens"] == 500,
+check("usage ledger rows (organisers' schema)", len(rows) >= 3 and rows[0]["key_suffix"] == "...1234" and rows[0]["input_tokens"] == 500
+      and rows[0]["schema_version"] == "yibu_call_audit_v1" and rows[0]["ok"] is True and rows[0]["usage_reported"] is True
+      and rows[0]["status_code"] == 101 and rows[0]["endpoint"].startswith("ws://"),
       f"{len(rows)} rows, first {rows[0] if rows else None}")
+check("cancelled reply logged with usage null (unknown, not zero)",
+      any(r["ok"] and not r["usage_reported"] and r["input_tokens"] is None for r in rows), str([(r['ok'], r['usage_reported']) for r in rows]))
 check("ledger never stores the key", "test-key-1234" not in open(ledger).read())
+check("no frame ever refused (frames wait for audio after each commit)", mock.stats["images_refused"] == 0 and om.stats.get("img_refused", 0) == 0,
+      f"mock refused {mock.stats['images_refused']}, client saw {om.stats.get('img_refused', 0)}")
 
 # 8. reconnect after the server drops us
 om.send({"type": "mock.close"})

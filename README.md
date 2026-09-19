@@ -158,32 +158,50 @@ two looks in a row of "not working" -> the nag, phrased from what it saw ("I can
 Positioning, control and safety never touch the cloud: no internet = local whisper/ollama/pyttsx3 take over.
 
 ```powershell
-$env:OMNI_API_KEY = "sk-..."              # from the sponsor's email. Never commit it. (YIBU_API_KEY also works)
-python tools/omni_test.py                 # offline: 15 checks against tools/omni_mock_server.py (no key, no internet)
+$env:YIBU_API_KEY = "sk-..."              # the team key from the organisers' e-mail (OMNI_API_KEY also works). Never commit it.
+python tools/omni_test.py                 # offline: 18 checks against tools/omni_mock_server.py (no key, no internet)
+python tools/omni_live_test.py            # LIVE: 13 checks on the real relay in ~90 s (spoken commands from wav files, no mic)
 python -m laptop.voice.omni               # live: mic + laptop webcam, prints tool calls and the transcript (Ctrl+C)
 python -m laptop.voice.omni_watch --image me.jpg    # one look: {"present","working","phone","activity"}
-python -m laptop.control.fake_esp32 --sim --plot
+python -m laptop.control.ble_gondola --fake --sim   # (or the real gondola over Bluetooth, section 1b)
 python -m laptop.control.pilot            # omni mode is the default once the key is set; --voice local to compare
 python -m laptop.voice.usage_log          # token totals per model/purpose from data/omni_usage.jsonl
+python tools/omni_report.py               # the two files + e-mail text the organisers want back
 ```
+The key is a per-user environment variable on this laptop (`setx YIBU_API_KEY ...` was run once); every NEW PowerShell
+window has it. It expires 2026-09-20 08:00 EDT.
+
 Knobs: `config.OMNI` (CAMERA = what Blimpy sees, FPS, WATCH_S, HALF_DUPLEX), env `OMNI_MODEL` (default
-`qwen3.5-omni-plus-realtime`), `OMNI_URL`, `OMNI_VOICE`, `OMNI_AUDIO_FMT`. **HALF_DUPLEX=True** mutes the cloud mic while
-Blimpy is talking (laptop speakers + laptop mic have no echo cancellation, the model would hear itself); with headphones
-set it False and you can interrupt Blimpy mid-sentence. `m` in the pilot mutes the cloud mic.
+`qwen3.5-omni-plus-realtime`), `OMNI_URL`, `OMNI_VOICE` (default `Tina`), `OMNI_AUDIO_FMT` (default `pcm`).
+**HALF_DUPLEX=True** mutes the cloud mic while Blimpy is talking (laptop speakers + laptop mic have no echo cancellation,
+the model would hear itself); with headphones set it False and you can interrupt Blimpy mid-sentence. `m` in the pilot
+mutes the cloud mic.
+
+**Models** (the key enables qwen3.5-omni-flash / -plus / -plus-realtime, qwen3.8-omni-flash, gemini-3.1-flash-live-preview):
+the voice loop uses `qwen3.5-omni-plus-realtime`, the only Qwen realtime model (Gemini Live is a different protocol).
+The focus watcher uses `qwen3.5-omni-flash`: measured live on the same frame, flash answered in 1.2-1.4 s with valid JSON
+every time, plus was as accurate at 1.4-3.4 s, qwen3.8-omni-flash took 3-7 s and disagreed with itself.
 
 **Windows gives a webcam to one process only**: if `localize.py`/`mono.py` runs on this laptop with source "0",
 give the pilot another camera (`--omni-cam 1`, a DroidCam URL, or `none` for ears-only).
 
-**Sponsor reporting**: every cloud call appends one line to `data/omni_usage.jsonl` (model, purpose, tokens, latency,
-key suffix only; never prompts/audio/images), the same fields as the organisers' `yibu_audit.py`. Their
-`summarize_usage.py --log data/omni_usage.jsonl` makes the two files they want back by the end of the event day (deadline in the key email)
-(reply to the key email). Missing token counts stay null: unknown is not zero.
+**Sponsor reporting** (due 2026-09-20 23:59 EDT, reply to the key e-mail): every cloud call is appended to
+`data/omni_usage.jsonl` through the organisers' own `yibu_audit.append_audit_record` (unmodified copy in `tools/yibu/`,
+schema `yibu_call_audit_v1`: model, purpose, tokens, latency, key suffix only; never prompts/audio/images). Realtime
+sessions log one row per response (its `response.done` usage; null when barge-in cancelled the reply) plus one failed
+row per connection that never reached a session; focus-watch HTTP calls one row each. `python tools/omni_report.py`
+runs their `summarize_usage.py` and writes `data/omni_report/usage_summary.json` + `usage_by_model_key_purpose.csv`
+and prints the e-mail text (team, project link, period, key suffix, how calls were logged and the gaps). Calls made
+with their example scripts land in their own `artifacts/yibu_api_calls.jsonl`; merge with `--extra-log`.
 
-**First live session checklist** (things the mock cannot prove; fix in `omni.py` SESSION / event handlers):
-audio in/out format name (`pcm` per Alibaba, `pcm16` on OpenAI-style relays -> `OMNI_AUDIO_FMT`), the tool-call event
-(`response.function_call_arguments.done` and/or `response.output_item.done` are both handled), `input_image_buffer.append`
-accepted at 1 fps, `semantic_vad` end-of-turn feel (`silence_duration_ms`), voice name, and that `[EVENT]` turns are
-spoken without a tool call.
+**Verified live on the relay** (2026-09-19, `tools/omni_live_test.py`): audio format `pcm` both ways; voice `Tina`
+(`Cherry` is rejected and the server drops the socket); `semantic_vad` accepted; the server adds input transcription
+(`qwen3-asr-flash-realtime`) and returns it as `conversation.item.input_audio_transcription.completed`; a tool call
+arrives as `response.function_call_arguments.done` and `response.output_item.done` with the same call_id (handled once);
+an image is refused until audio has been appended in the session, so frames wait for the first mic packet;
+`response.create` is refused while a response is running, so tool results and `[EVENT]` turns queue until
+`response.done`; a reply cut off by barge-in comes back `cancelled` with usage null. Latency: text turn to first audio
+1.1-1.5 s; end of a spoken command to tool call to first confirmation audio 1.5 s.
 
 ## 1c. Positioning data (record / replay / venue)
 

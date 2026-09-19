@@ -12,6 +12,10 @@ Env:  OMNI_API_KEY (or YIBU_API_KEY)   the sponsored key
       OMNI_URL    default wss://yibuapi.com/v1/realtime      OMNI_MODEL  default qwen3.5-omni-plus-realtime
 The event vocabulary is the OpenAI Realtime one that Alibaba's Qwen-Omni-Realtime speaks (input_audio_buffer.append,
 input_image_buffer.append, response.audio.delta, function calls). Everything provider-specific is in SESSION below.
+Verified live on the relay with the sponsored key: "pcm" in/out, semantic_vad, voice "Tina", set_intent arrives as
+response.function_call_arguments.done AND response.output_item.done (same call_id), input transcription comes back as
+conversation.item.input_audio_transcription.completed, usage is in response.done (null when a reply was cut off by
+barge-in), and an image is refused until audio has been appended in the session.
 """
 import base64, json, os, queue, sys, threading, time, uuid
 from collections import deque
@@ -63,11 +67,11 @@ Rules:
   single short "Mm-hm." at most.
 - Never invent robot abilities you were not given. You cannot pick things up or leave the room."""
 
-# session.update payload. VERIFY on the first live test: Alibaba documents input_audio_format "pcm" (16 kHz) and
-# output "pcm" (24 kHz); OpenAI-style relays may want "pcm16". OMNI_AUDIO_FMT overrides without a code change.
+# session.update payload. Verified live: "pcm" (16 kHz in, 24 kHz out) is what the relay wants; OMNI_AUDIO_FMT still
+# overrides it. The server adds input_audio_transcription (qwen3-asr-flash-realtime) itself.
 SESSION = {
     "modalities": ["text", "audio"],
-    "voice": os.environ.get("OMNI_VOICE", "Cherry"),
+    "voice": os.environ.get("OMNI_VOICE", "Tina"),                # verified live: "Cherry" is rejected by the relay, "Tina" is its default
     "instructions": INSTRUCTIONS,
     "input_audio_format": os.environ.get("OMNI_AUDIO_FMT", "pcm"),
     "output_audio_format": os.environ.get("OMNI_AUDIO_FMT", "pcm"),
@@ -152,7 +156,9 @@ class OmniLive:
         self.connected = False; self.last_error = None; self.n_reconnect = 0
         self.stats = {"audio_out": 0, "img_out": 0, "audio_in": 0, "calls": 0, "responses": 0, "events": 0}
         self.events = deque(maxlen=200)     # last raw server events (debug / tests)
-        self._done_calls = set(); self._t_resp = 0.0
+        self._done_calls = set(); self._t_resp = 0.0; self._audio_since_commit = 0; self._sess_ok = False
+        self.t_speech_stopped = 0.0; self.t_first_audio = 0.0     # per response: VAD end of the user's turn -> first reply audio
+        self._resp_active = False; self._after_done = []           # response.create is refused while a response runs: queue it
         self.transcript = []                # (who, text) for the demo log
 
     # ------------------------------------------------------------------ lifecycle
@@ -183,11 +189,16 @@ class OmniLive:
     def _ws_loop(self):
         import websocket
         while not self.stopping:
+            self._sess_ok = False; self._audio_since_commit = 0
             self.ws = websocket.WebSocketApp(
                 f"{self.url}?model={self.model}", header=[f"Authorization: Bearer {self.key}", "OpenAI-Beta: realtime=v1"],
                 on_open=self._on_open, on_message=self._on_message, on_error=self._on_error, on_close=self._on_close)
             self.ws.run_forever(ping_interval=20, ping_timeout=10)
             self.connected = False; self.ready.clear()
+            if not self._sess_ok and self.usage_log:              # a connection that never reached a session is a failed call
+                from . import usage_log
+                usage_log.record(self.model, self.key, self.purpose, f"{self.url}?model={self.model}", "websocket", False,
+                                 0, None, self.last_error or "no session", path=self.usage_path)
             if self.stopping: break
             self.n_reconnect += 1
             wait = min(10, 1.5 * self.n_reconnect)
@@ -218,12 +229,18 @@ class OmniLive:
         t = ev.get("type", ""); self.stats["events"] += 1
         if self.debug or not t.endswith((".delta", ".append")): self.events.append(ev)
         if t in ("session.created", "session.updated"):
+            self._sess_ok = True
             if t == "session.updated" or not self.ready.is_set():
                 self.ready.set(); self.n_reconnect = 0
         elif t == "response.audio.delta":
+            if not self.t_first_audio: self.t_first_audio = time.monotonic()
             if self.spk: self.spk.write(base64.b64decode(ev.get("delta", "")))
         elif t == "input_audio_buffer.speech_started":
             if self.spk: self.spk.flush()                 # barge-in: user talks over Blimpy
+        elif t == "input_audio_buffer.speech_stopped":
+            self.t_speech_stopped = time.monotonic()
+        elif t == "input_audio_buffer.committed":
+            self._audio_since_commit = 0
         elif t in ("response.function_call_arguments.done",):
             self._tool_call(ev.get("call_id"), ev.get("name"), ev.get("arguments"))
         elif t == "response.output_item.done":
@@ -237,20 +254,25 @@ class OmniLive:
             txt = ev.get("transcript") or ""
             if txt: self.transcript.append(("you", txt)); self._log("you", txt)
         elif t == "response.created":
-            self._t_resp = time.monotonic()
+            self._t_resp = time.monotonic(); self.t_first_audio = 0.0; self._resp_active = True
         elif t == "response.done":
-            self.stats["responses"] += 1
+            self.stats["responses"] += 1; self._resp_active = False
             r = ev.get("response") or {}
             if self.usage_log:
                 from . import usage_log
-                usage_log.record(self.model, self.key, self.purpose, "/v1/realtime", "websocket",
+                usage_log.record(self.model, self.key, self.purpose, f"{self.url}?model={self.model}", "websocket",
                                  r.get("status", "completed") != "failed", (time.monotonic() - self._t_resp) * 1000,
                                  r.get("usage"), r.get("status_details") if r.get("status") == "failed" else None,
-                                 path=self.usage_path)
+                                 path=self.usage_path, status_code=101)
+            if self._after_done:
+                self.send({"type": "response.create"}); self._after_done.clear()
         elif t == "error":
             e = ev.get("error") or ev
-            self.last_error = f"server: {e.get('message') or e}"
-            print(f"[omni] error: {e}")
+            if "append image" in str(e.get("message", "")):       # a frame raced a commit: harmless, the next one goes
+                self.stats["img_refused"] = self.stats.get("img_refused", 0) + 1; self._audio_since_commit = 0
+            else:
+                self.last_error = f"server: {e.get('message') or e}"
+                print(f"[omni] error: {e}")
 
     def _log(self, who, text):
         if self.on_text: self.on_text(who, text)
@@ -269,7 +291,12 @@ class OmniLive:
             except Exception as e: out = f"failed: {e}"
         self.send({"type": "conversation.item.create",
                    "item": {"type": "function_call_output", "call_id": call_id, "output": json.dumps({"result": out})}})
-        self.send({"type": "response.create"})
+        self._respond()
+
+    def _respond(self):
+        """response.create now, or right after the running response finishes (the relay refuses a second one)."""
+        if self._resp_active: self._after_done.append(True)
+        else: self.send({"type": "response.create"})
 
     # ------------------------------------------------------------------ inputs
     def feed_audio(self, pcm16_bytes):
@@ -277,7 +304,7 @@ class OmniLive:
         if self.muted or not self.ok: return
         if self.half_duplex and self.spk and self.spk.busy(): return
         if self.send({"type": "input_audio_buffer.append", "audio": base64.b64encode(pcm16_bytes).decode()}):
-            self.stats["audio_in"] += len(pcm16_bytes)
+            self.stats["audio_in"] += len(pcm16_bytes); self._audio_since_commit += 1
 
     def _start_mic(self):
         import sounddevice as sd
@@ -286,7 +313,9 @@ class OmniLive:
         self.mic_stream.start()
 
     def send_frame(self, frame):
-        if frame is None or not self.ok: return False
+        # Verified live: the relay refuses an image until audio has been appended to the CURRENT input buffer ("Error
+        # append image before append audio"; a commit opens a fresh buffer), so frames wait for the next mic packet.
+        if frame is None or not self.ok or self._audio_since_commit == 0: return False
         if self.send({"type": "input_image_buffer.append", "image": encode_jpeg(frame)}):
             self.stats["img_out"] += 1; return True
         return False
@@ -306,14 +335,16 @@ class OmniLive:
         ok = self.send({"type": "conversation.item.create",
                         "item": {"type": "message", "role": "user",
                                  "content": [{"type": "input_text", "text": f"[EVENT] Tell the user, in your own words: {text}"}]}})
-        return ok and self.send({"type": "response.create"})
+        if ok: self._respond()
+        return ok
 
     def text(self, text):
         """A typed user turn (debug / the 't' key)."""
         if not self.ok: return False
-        self.send({"type": "conversation.item.create",
-                   "item": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]}})
-        return self.send({"type": "response.create"})
+        ok = self.send({"type": "conversation.item.create",
+                         "item": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]}})
+        if ok: self._respond()
+        return ok
 
 
 if __name__ == "__main__":

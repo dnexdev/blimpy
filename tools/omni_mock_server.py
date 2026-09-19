@@ -2,9 +2,11 @@
 
   python tools/omni_mock_server.py --port 8765          # then: OMNI_URL=ws://127.0.0.1:8765/v1/realtime OMNI_API_KEY=x python -m laptop.voice.omni
 
-Speaks the OpenAI-style realtime event vocabulary: session.created/updated, server VAD (speech_started after ~1 s of
-mic packets, speech_stopped 0.4 s later), scripted turns (a set_intent tool call or an audio reply), function_call_output
-+ response.create -> audio reply, response.done with usage. Not a model: every turn comes from `script`.
+Speaks the OpenAI-style realtime event vocabulary as the real relay does (checked live with the sponsored key):
+session.created/updated, server VAD (speech_started after ~1 s of mic packets, speech_stopped + committed +
+input_audio_transcription.completed 0.4 s later), scripted turns (a set_intent tool call or an audio reply),
+function_call_output + response.create -> audio reply, response.done with usage (null when cancelled by barge-in), and
+the relay's rule that an image is refused until audio has been appended. Not a model: every turn comes from `script`.
 """
 import argparse, asyncio, base64, json, math, sys, threading, time, uuid
 
@@ -18,8 +20,8 @@ class Mock:
         self.script = list(script or [])
         self.vad_packets = vad_packets
         self.sessions = 0
-        self.stats = {"audio_appends": 0, "images": 0, "tool_outputs": [], "messages": [], "response_creates": 0,
-                      "sessions": 0, "session_updates": []}
+        self.stats = {"audio_appends": 0, "images": 0, "images_refused": 0, "tool_outputs": [], "messages": [],
+                      "response_creates": 0, "sessions": 0, "session_updates": []}
         self.kick = None            # asyncio.Event: tests can force the next scripted turn
 
     async def handler(self, ws):
@@ -40,8 +42,8 @@ class Mock:
                 await ws.send(json.dumps({"type": "response.done", "response": {"id": rid, "status": "completed",
                                           "usage": {"input_tokens": 300, "output_tokens": 40, "total_tokens": 340}}}))
             except asyncio.CancelledError:
-                await ws.send(json.dumps({"type": "response.done", "response": {"id": rid, "status": "cancelled",
-                                          "usage": {"input_tokens": 300, "output_tokens": 10, "total_tokens": 310}}}))
+                await ws.send(json.dumps({"type": "response.done", "response": {"id": rid, "status": "cancelled", "usage": None,
+                                          "status_details": {"type": "cancelled", "reason": "turn_detected"}}}))
                 raise
             finally:
                 talking = None
@@ -76,16 +78,27 @@ class Mock:
                     await ws.send(json.dumps({"type": "session.updated", "session": ev["session"]}))
                 elif t == "input_audio_buffer.append":
                     self.stats["audio_appends"] += 1; appends_since += 1
+                    self.stats["audio_since_commit"] = self.stats.get("audio_since_commit", 0) + 1
                     if not speaking and appends_since >= self.vad_packets:
                         speaking = True; appends_since = 0
                         await ws.send(json.dumps({"type": "input_audio_buffer.speech_started"}))
                         if talking: talking.cancel()                    # barge-in cancels the current reply
                     elif speaking and appends_since >= self.vad_packets * 0.4:
                         speaking = False; appends_since = 0
-                        await ws.send(json.dumps({"type": "input_audio_buffer.speech_stopped"}))
+                        iid = f"item_{uuid.uuid4().hex[:8]}"
+                        await ws.send(json.dumps({"type": "input_audio_buffer.speech_stopped", "item_id": iid, "audio_end_ms": 1400}))
+                        await ws.send(json.dumps({"type": "input_audio_buffer.committed", "item_id": iid}))
+                        self.stats["audio_since_commit"] = 0
+                        await ws.send(json.dumps({"type": "conversation.item.input_audio_transcription.completed", "item_id": iid,
+                                                  "transcript": "mock transcript", "language": "en", "emotion": "neutral"}))
                         await next_turn()
                 elif t == "input_image_buffer.append":
-                    self.stats["images"] += 1
+                    if not self.stats.get("audio_since_commit"):    # the real relay: "Error append image before append audio"
+                        self.stats["images_refused"] += 1
+                        await ws.send(json.dumps({"type": "error", "error": {"type": "invalid_request_error",
+                                                  "message": "Error append image before append audio."}}))
+                    else:
+                        self.stats["images"] += 1
                 elif t == "conversation.item.create":
                     item = ev.get("item", {})
                     if item.get("type") == "function_call_output": self.stats["tool_outputs"].append(item)
