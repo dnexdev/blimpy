@@ -24,9 +24,9 @@ def check_intrinsics(name, calib_dir=config.CALIB_DIR):
     tag = f"intrinsics {name}"
     if not p.exists():
         return [(FAIL, tag, f"{p} missing: python tools/calib/intrinsics.py --name {name} --source ...")]
-    d = np.load(p)
-    K, dist, size = np.asarray(d["K"], float), np.asarray(d["dist"], float), d["size"]
-    rms = float(d["rms"]) if "rms" in d else -1.0
+    with np.load(p) as d:
+        K, dist, size = np.asarray(d["K"], float), np.asarray(d["dist"], float), d["size"]
+        rms = float(d["rms"]) if "rms" in d else -1.0
     try:
         w, h = int(size[0]), int(size[1]); assert w > 0 and h > 0
     except Exception:
@@ -55,7 +55,8 @@ def check_extrinsics(name, calib_dir=config.CALIB_DIR, tag_size=config.TAG_SIZE_
     if not ip.exists():
         return [(FAIL, tag, "cannot check: intrinsics missing")]
     cam = Camera.load(name, calib_dir)
-    d = np.load(ep)
+    with np.load(ep) as f:
+        d = {k: f[k] for k in f.files}
     out = []
     pos = cam.position(); z = float(pos[2])
     if z < 0.3 or z > 5.0:

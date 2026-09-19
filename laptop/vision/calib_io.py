@@ -20,14 +20,16 @@ class Camera:
         ip = os.path.join(calib_dir, f"{name}_intrinsics.npz")
         if not os.path.exists(ip):
             raise FileNotFoundError(f"{ip} missing: run  python tools/calib/intrinsics.py --name {name} --source ...")
-        i = np.load(ip)
+        with np.load(ip) as i:                       # closed at once: Windows will not delete an open .npz
+            K, dist, size = i["K"], i["dist"], i["size"]
         R = t = None
         ep = os.path.join(calib_dir, f"{name}_extrinsics.npz")
         if os.path.exists(ep):
-            e = np.load(ep); R, t = e["R"], e["t"]
+            with np.load(ep) as e:
+                R, t = e["R"], e["t"]
         elif need_extrinsics:
             raise FileNotFoundError(f"{ep} missing: run  python tools/calib/extrinsics.py --name {name} --source ...")
-        return cls(name, i["K"], i["dist"], i["size"], R, t)
+        return cls(name, K, dist, size, R, t)
 
     @classmethod
     def nominal(cls, name, size, calib_dir=None, f_over_w=0.85, f_px=None):

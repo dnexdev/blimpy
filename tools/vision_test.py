@@ -242,7 +242,10 @@ def test_floor_mat():
         cam0 = Camera("A", cam.K, cam.dist, cam.size)
         cam2, info = floor.auto_extrinsics(cam0, FakeStream(), S, layout, seconds=1.0, calib_dir=d,
                                            sleep=lambda s: clock.__setitem__(0, clock[0] + max(s, 0.03)), clock=lambda: clock[0])
-        saved = np.load(os.path.join(d, "A_extrinsics.npz")) if cam2 is not None else {}
+        saved = {}
+        if cam2 is not None:
+            with np.load(os.path.join(d, "A_extrinsics.npz")) as f:
+                saved = {k: f[k] for k in f.files}
         good = (cam2 is not None and np.linalg.norm(cam2.position() - cam.position()) < 0.02 and int(saved["n_tags"]) == 4
                 and abs(float(saved["tag_size"]) - S) < 1e-6 and info["n_samples"] >= 8)
         ok &= good

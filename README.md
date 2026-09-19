@@ -348,10 +348,12 @@ are compared on the same clock. One camera only: `vision_check.py --names A --li
 
 ```powershell
 python tools/calib/make_targets.py                          # checkerboard + the 4 mat tags; print at 100 %, MEASURE a tag edge -> config.TAG_SIZE_M
-python tools/calib/intrinsics.py --source 0 --name A        # ONCE PER DEVICE, EVER (stiff board, focus locked, Center Stage off). Never at the venue.
+python tools/calib/intrinsics.py --source 0 --name laptop   # ONCE PER DEVICE, EVER (calib/laptop_intrinsics.npz is committed) (stiff board, focus locked, Center Stage off). Never at the venue.
 python tools/calib/intrinsics.py --name B --nominal 1280 720   # no board / no time: nominal pinhole, ~5 % range error; a tape from lens to a tag checks it
-# FLOOR MAT: tape tags 0-3 flat on the floor roughly at the corners of a square, pages the same way up (by eye is fine), then:
-python tools/calib/survey_mat.py --source 0 --name A     # ONCE per taping: fits each page's position / twist / size -> calib/mat.json (residual < 1 px)
+# FLOOR MAT = the four tag pages glued flat to ONE rigid board (a 36x48" tri-fold science-fair board opened flat: tags at the
+# corners, ~0.9 m x 0.6 m centre to centre, all the same way up, ids 0 -> 1 along the long side, 0 -> 3 along the short side).
+# Surveyed ONCE at home (calib/mat.json is committed), then dropped on the floor in any room: zero setup at the venue.
+python tools/calib/survey_mat.py --source 0 --name laptop   # ONCE per board: fits each page's position / twist / size -> calib/mat.json (residual < 1 px)
 python tools/vision_check.py --live                        # GO / NO-GO: calib files real? cameras placed sanely? tag size? models? venue? fps / skew / mat / drift
 python -m laptop.vision.localize --auto-calib --show        # cameras anywhere that see the mat: poses solved in 2 s at start, re-solved if one moves
 python -m laptop.vision.mono --a 0 --auto-calib --show      # ONE camera only: feet-on-floor + balloon size (same message on udp 5007)

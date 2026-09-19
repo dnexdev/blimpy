@@ -7,8 +7,8 @@ from .positioning import venue as _venue   # stdlib-only, ~1 ms; resolves venues
 # --- Camera sources (anything cv2.VideoCapture understands; see laptop/vision/streams.py) ---
 # webcams: "0", "1"    phones (DroidCam): "http://192.168.137.21:4747/video"
 # Raspberry Pi (rpicam-vid H.264 over UDP): "udp://@:5000" (A) and "udp://@:5001" (B)
-SOURCES = {"A": "0", "B": "http://192.168.137.25:4747/video"}   # A: iPhone via Continuity Camera (index 0; FaceTime = 1). B: friend's iPhone, DroidCam, on the laptop hotspot (tools/find_phone.py)
-CALIB_NAMES = {"A": "iphone", "B": "B"}   # which calib/<name>_*.npz each role uses (localize --names)
+SOURCES = {"A": "0", "B": "http://192.168.137.25:4747/video"}   # A: the laptop webcam (1280x720) = the ROOM camera. B: a phone running DroidCam on the laptop hotspot (tools/find_phone.py), optional second camera
+CALIB_NAMES = {"A": "laptop", "B": "B"}   # which calib/<name>_*.npz each role uses (localize --names); calib/laptop_intrinsics.npz is committed (one device, calibrated once)
 ROTATE = {"A": 0, "B": 90}              # degrees clockwise applied to each stream (phone held in portrait -> 90); calibrate at the rotated size
 
 # --- OMNI Live (Huawei track): cloud ears/eyes/mouth via Qwen3.5-Omni on the yibuapi relay (laptop/voice/omni.py) ---
@@ -90,8 +90,10 @@ POSITIONING_DIR = "data/positioning"   # recorded sessions (laptop/positioning/s
 CHECKER_COLS, CHECKER_ROWS = 9, 6  # INNER corners
 SQUARE_M = 0.025                   # measure a printed square and correct this if needed
 TAG_SIZE_M = 0.15                  # black-square edge of tag 0: all four mat pages are the 150 mm print. MEASURE new prints!
-MAT_SPACING_M = 1.0                # floor mat: centre-to-centre distance between tags 0-1 and 0-3 (tape them, MEASURE, put it here)
-MAT = {0: (0.0, 0.0), 1: (MAT_SPACING_M, 0.0), 2: (MAT_SPACING_M, MAT_SPACING_M), 3: (0.0, MAT_SPACING_M)}
+MAT_SPACING_M = (0.9, 0.6)         # floor mat: centre-to-centre metres tag 0->1 (along +X) and 0->3 (along +Y); one number = square.
+#     The mat is the four tags glued to ONE rigid board (README 3a), so it is surveyed ONCE at home (tools/calib/survey_mat.py ->
+#     calib/mat.json, committed) and just dropped on the floor in every room. These are the nominal numbers; the survey wins.
+MAT = {0: (0.0, 0.0), 1: (MAT_SPACING_M[0], 0.0), 2: (MAT_SPACING_M[0], MAT_SPACING_M[1]), 3: (0.0, MAT_SPACING_M[1])}
 #     tag id -> centre (x, y) m on the floor, ALL printed the same way up. World origin = tag 0 (laptop/vision/floor.py).
 #     One tag alone works but leaves the camera pitch uncertain (~3 deg = 40 cm at 2.5 m from a low camera).
 

@@ -11,6 +11,8 @@ models/*.pt
 targets/*.png
 sim_out/
 .DS_Store
-calib/*.npz
-# per-venue mat survey (tools/calib/survey_mat.py); re-survey at each site
-calib/mat.json
+# calib/: the laptop webcam's intrinsics and the rigid mat board's survey ARE committed (one device, one board, done once).
+# Anything else (a phone's intrinsics, per-room extrinsics) stays local.
+calib/*
+!calib/laptop_intrinsics.npz
+!calib/mat.json
