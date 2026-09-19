@@ -88,8 +88,8 @@ BLE = dict(
 CALIB_DIR = "calib"
 POSITIONING_DIR = "data/positioning"   # recorded sessions (laptop/positioning/session.py); gitignored
 CHECKER_COLS, CHECKER_ROWS = 9, 6  # INNER corners
-SQUARE_M = 0.025                   # measure a printed square and correct this if needed
-TAG_SIZE_M = 0.15                  # black-square edge of tag 0: all four mat pages are the 150 mm print. MEASURE new prints!
+SQUARE_M = 0.0228                  # MEASURED 2026-09-19 on the printed board (the printer scaled the page to 91 %)
+TAG_SIZE_M = 0.1367                # MEASURED 2026-09-19: black-square edge of the printed tags (150 mm file printed at 91 %). MEASURE new prints!
 MAT_SPACING_M = (0.9, 0.6)         # floor mat: centre-to-centre metres tag 0->1 (along +X) and 0->3 (along +Y); one number = square.
 #     The mat is the four tags glued to ONE rigid board (README 3a), so it is surveyed ONCE at home (tools/calib/survey_mat.py ->
 #     calib/mat.json, committed) and just dropped on the floor in every room. These are the nominal numbers; the survey wins.
