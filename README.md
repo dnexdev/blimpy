@@ -242,6 +242,33 @@ python -m laptop.control.pilot --no-voice              # FOLLOW uses the eye for
 4. Room camera (when the Pi or a phone is up): section 2 as before. With both, the pilot prints `FOLLOW eye+room`
    and the heading estimate locks within a second of the eye seeing you.
 
+## 1f. Rehearse the whole demo without the robot
+
+The simulated gondola (eye + ultrasonic, walking person, live plot) behind the BLE bridge, the real pilot, the real
+cloud voice. One command in a NEW PowerShell window (the key is in the environment):
+```powershell
+python tools/rehearse.py                 # SPACE arms. Then talk: "Blimpy, follow me", "turn left", "stop", "set a timer for one minute", "what do you see"
+python tools/rehearse.py --relative      # pretend there is no room camera (eye + ultrasonic only)
+python tools/rehearse.py -- --voice local    # offline voice (whisper + ollama, v = push-to-talk)
+python tools/omni_sim_test.py [--relative]   # the same chain, automated with spoken wav commands: 12 checks, ~2 min, ~8 cloud calls
+```
+What to watch: the plot (blue balloon turns toward the red person and settles 1.5 m away), the pilot line
+(`FOLLOW eye+room d=1.52` or `FOLLOW eye b=+3 r=1.48`), and the transcript. In the sim Blimpy's conversational eyes are
+still the laptop webcam (the simulated eye only feeds the follow law), so "what do you see" describes your desk.
+
+## 1g. Background noise (to do, after the software rehearsal)
+
+The cloud mic is always open; a hackathon hall will talk to Blimpy all day. In order of payoff:
+1. **A close-talk mic on the speaker** (headset or lapel mic, or the phone as a mic): 20 dB more voice than room. Cheapest
+   and the biggest win; `sounddevice` takes any input device (`OmniLive(mic_device=...)`).
+2. **Level gate** in `feed_audio`: only stream packets whose RMS is above a threshold set from the close mic (background
+   talkers never reach it). One knob, no model.
+3. **Name gate**: the instructions already say only speech addressed to Blimpy counts; the transcript comes back with each
+   turn, so a turn whose transcript has no "Blimpy" (or "Blippi") can be ignored for tool calls.
+4. **Push-to-talk** as the safety net: `m` mutes the cloud mic in the pilot today; a foot pedal or a key held while
+   speaking is deterministic and judges do not mind it.
+A wake word (openWakeWord) is possible but needs a trained "blimpy" model; not worth it before the above.
+
 ## 1c. Positioning data (record / replay / venue)
 
 `laptop/positioning/` is the scaffold for everything about WHERE things are, independent of which sensor says so.

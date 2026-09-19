@@ -301,6 +301,8 @@ def main():
     ap.add_argument("--ideal", action="store_true", help="with --fake: perfect sensors, no wind")
     ap.add_argument("--no-tof", action="store_true", help="with --fake: no ultrasonic in the IMU line (default: on, like the real gondola)")
     ap.add_argument("--no-fpv", action="store_true", help="with --fake --sim: no eye on the balloon in the 5007 state (default: on)")
+    ap.add_argument("--no-vision", action="store_true", help="with --fake --sim: no room camera (no balloon / person fixes on 5007): eye + ultrasonic only")
+    ap.add_argument("--plot", action="store_true", help="with --fake: live top-down plot of the simulated world (matplotlib)")
     ap.add_argument("--probe", action="store_true", help="print raw IMU lines for 10 s and exit")
     ap.add_argument("--motor", nargs=2, metavar=("LETTER", "PCT"), help="bench: run one motor for 2 s, then STOP")
     ap.add_argument("--no-http", action="store_true"); ap.add_argument("--imu-log", action="store_true", help="append samples to data/imu.jsonl")
@@ -308,8 +310,8 @@ def main():
 
     if args.fake:
         from ..sim.world import IDEAL, REAL, World
-        world = World(dict(IDEAL if args.ideal else REAL, tof=not args.no_tof, fpv=not args.no_fpv), person=args.person, psi0=args.psi0,
-                      seed=args.seed, epoch=time.monotonic())
+        world = World(dict(IDEAL if args.ideal else REAL, tof=not args.no_tof, fpv=not args.no_fpv, vision=not args.no_vision),
+                      person=args.person, psi0=args.psi0, seed=args.seed, epoch=time.monotonic())
         tr = SimTransport(world, publish_state=args.sim, imu_units=B["GYRO_UNITS"])
     else:
         tr = BleakTransport(args.name)
@@ -331,9 +333,17 @@ def main():
     print(f"[bridge] udp {CMD_PORT} -> {'simulated robot' if args.fake else 'BLE ' + (args.name or B['NAME'])} -> telemetry on {TELEM_PORT}"
           + ("" if args.no_http else f"   http://127.0.0.1:{B['HTTP_PORT']}/imu  /status") + "   (Ctrl+C = STOP + quit)")
     th = threading.Thread(target=br.run, daemon=True); th.start()
+    plot = None
+    if args.plot and args.fake:
+        from ..sim.plot import Plot
+        plot = Plot(world, "Blimpy simulator (BLE bridge)")
     try:
+        next_print = 0.0
         while th.is_alive():
-            time.sleep(0.5)
+            time.sleep(0.1)
+            if plot: plot.update(world)
+            if time.monotonic() < next_print: continue
+            next_print = time.monotonic() + 0.5
             s = br.status(); m = s["motors"]
             print(f"[bridge] {'BLE ' if s['connected'] else 'no link'} {'ARMED' if s['armed'] else 'off  '} age={s['age_ms']:5d} "
                   f"C={m['C']:+4d} D={m['D']:+4d} E={m['E']:+4d} F={m['F']:+4d}  imu {s['imu']['hz']:4.1f} Hz age {s['imu']['age_ms']}  "
