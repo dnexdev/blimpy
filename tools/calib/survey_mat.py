@@ -1,8 +1,8 @@
 """Survey the floor mat ONCE after taping it: where is each page really, how twisted, how big. Any camera that sees
 every tag will do. Saves calib/mat.json; mono / localize / extrinsics / vision_check use it from then on.
 
-  python tools/calib/survey_mat.py --source 0 --name iphone
-  python tools/calib/survey_mat.py --source 0 --name iphone --ref 0 --seconds 2
+  python tools/calib/survey_mat.py --source 0 --name laptop
+  python tools/calib/survey_mat.py --source 0 --name laptop --ref 0 --seconds 2
 
 Pages can be taped by eye: the fit (laptop/vision/floor.py survey) recovers their positions relative to the
 reference page (default tag 0 = world origin) from the image itself; the printed size of tag 0 (config.TAG_SIZE_M,
