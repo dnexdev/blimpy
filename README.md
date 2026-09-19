@@ -14,9 +14,11 @@ laptop/vision/       streams.py · calib_io.py · triangulate.py · detect.py (Y
 laptop/positioning/  schema.py · session.py (record/load) · evaluate.py · sources.py (udp/replay/sim) · fuse.py (stub) · venue.py · record.py · replay.py · capture_place.py
 laptop/sim/          world.py (balloon physics + every sensor model) · plot.py (live top-down view)
 laptop/voice/        stt.py (whisper) · intent.py (local LLM -> JSON intents) · tts.py · omni.py (Qwen3.5-Omni realtime: ears/eyes/mouth, OMNI Live track) · omni_watch.py (focus watcher) · usage_log.py
+                     addressee.py (who is that for: cues + room + judge) · session_rec.py (keeps each session) · voiceprint.py (speaker-embedding measurement)
 tools/calib/         make_targets.py · intrinsics.py · extrinsics.py · triangulate_test.py · record_clips.py
 tools/dataset/       build_balloon_dataset.py · label_site.py · extract_frames.py
 tools/               scenarios.py · sim_test.py (--ble) · ble_test.py · behaviors_test.py · control_test.py · vision_test.py · positioning_test.py · intent_test.py
+                     omni_test.py (offline) · omni_live_test.py · addressee_backtest.py (replay recorded sessions, no key) · omni_report.py (sponsor usage report)
                      webcam_test.py · balloon_eval.py · vision_check.py (go/no-go) · positioning_eval.py (sessions vs truth)
 calib/               <name>_intrinsics.npz (once) and <name>_extrinsics.npz (every placement)
 venues/              default.json: the room (arena, obstacles, places). Committed; config.py exports it as ARENA / OBSTACLES / JUDGES_XY
@@ -164,13 +166,13 @@ Positioning, control and safety never touch the cloud: no internet = local whisp
 
 ```powershell
 $env:YIBU_API_KEY = "sk-..."              # the team key from the organisers' e-mail (OMNI_API_KEY also works). Never commit it.
-python tools/omni_test.py                 # offline: 28 checks against tools/omni_mock_server.py (no key, no internet, free)
+python tools/omni_test.py                 # offline: 60 checks against tools/omni_mock_server.py (no key, no internet, free)
 python tools/omni_live_test.py            # LIVE: 13 checks on the real relay in ~90 s (spoken commands from wav files, no mic; ~0.35 units)
 python -m laptop.voice.omni --meter       # no cloud: mic level vs the gate; it must say OPEN only while you talk (do this at the venue)
 python -m laptop.voice.omni --calibrate --mic AirPods   # no cloud: 3 x 6 s (room, you, other people) -> the GATE_DB for this room, or "get the mic closer"
-python -m laptop.voice.omni               # live: mic + laptop webcam, prints tool calls, the transcript and what it cost (Ctrl+C)
+python -m laptop.voice.omni               # live: mic + laptop webcam; prints every turn with why it was (not) for Blimpy, tool calls, the cost; keeps the session (Ctrl+C)
 python -m laptop.voice.omni_watch --image me.jpg    # one look: {"present","working","phone","activity"}
-python -m laptop.control.ble_gondola --fake --sim   # (or the real gondola over Bluetooth, section 1b)
+python -m laptop.control.ble_gondola --fake --sim   # (or the real gondola over Bluetooth, section 0)
 python -m laptop.control.pilot            # omni mode is the default once the key is set; --voice local to compare
 python -m laptop.voice.usage_log          # token totals per model/purpose from data/omni_usage.jsonl
 python tools/omni_report.py               # the two files + e-mail text the organisers want back
@@ -178,10 +180,12 @@ python tools/omni_report.py --balance     # spent X of 200, and when the relay c
 python tools/omni_report.py --sessions    # the relay's own bill, one row per session: seconds of audio sent -> units
 python tools/omni_report.py --reconcile   # the report, plus the ledger checked against the relay's bill (what was never logged)
 ```
-The key is a per-user environment variable on this laptop (`setx YIBU_API_KEY ...` was run once); every NEW PowerShell
-window has it. On any other machine: `cp .env.example .env`, fill in `YIBU_API_KEY` (and `OMNI_BASE_URL` if the relay
-moves); `.env` is gitignored, read on start by `laptop/__init__.py`, and a variable set in the shell wins over it. The e-mail says it expires 2026-09-20 08:00 EDT, but the relay itself reports access_until
-2026-09-20 02:51 EDT (`GET /v1/dashboard/billing/subscription`): plan for the EARLIER one.
+The key: on the Windows demo laptop it is a per-user environment variable (`setx YIBU_API_KEY ...` was run once). On
+any other machine (macOS / Linux: `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`) copy
+`.env.example` to `.env` and fill in `YIBU_API_KEY` (and `OMNI_BASE_URL` if the relay moves). `.env` is gitignored,
+read on start by `laptop/__init__.py`; a variable set in the shell wins over it. The e-mail says the key expires
+2026-09-20 08:00 EDT, the relay itself reports access_until 2026-09-20 02:51 EDT
+(`GET /v1/dashboard/billing/subscription`): plan for the EARLIER one.
 
 **What the relay bills, and the mic gate.** Read back from the relay's own per-call log on 2026-09-19 (`--sessions`):
 the realtime model is charged for the audio the laptop SENDS, 100 tokens per second x 8 (audio) x 2 (model) x 2 (group)
@@ -221,7 +225,7 @@ give the pilot another camera (`--omni-cam 1`, a DroidCam URL, or `none` for ear
 `data/omni_usage.jsonl` through the organisers' own `yibu_audit.append_audit_record` (unmodified copy in `tools/yibu/`,
 schema `yibu_call_audit_v1`: model, purpose, tokens, latency, key suffix only; never prompts/audio/images). Realtime
 sessions log one row per response (its `response.done` usage; null when barge-in cancelled the reply) plus one failed
-row per connection that never reached a session; focus-watch HTTP calls one row each. `python tools/omni_report.py`
+row per connection that never reached a session; HTTP calls (the focus watcher, the addressee judge) one row each. `python tools/omni_report.py`
 runs their `summarize_usage.py` and writes `data/omni_report/usage_summary.json` + `usage_by_model_key_purpose.csv`
 and prints the e-mail text (team, project link, period, key suffix, how calls were logged and the gaps; also saved as
 `data/omni_report/email_draft.txt`). The ledger is per machine (`data/` is not committed): copy every other machine's
@@ -295,78 +299,83 @@ What to watch: the plot (blue balloon turns toward the red person and settles 1.
 (`FOLLOW eye+room d=1.52` or `FOLLOW eye b=+3 r=1.48`), and the transcript. In the sim Blimpy's conversational eyes are
 still the laptop webcam (the simulated eye only feeds the follow law), so "what do you see" describes your desk.
 
-## 1g. Background noise (to do, after the software rehearsal)
+## 1g. Noise, and who a sentence is for
 
-A hackathon hall will talk to Blimpy all day. In order of payoff:
-1. **A close-talk mic on the speaker** (headset or lapel mic, or the phone as a mic): 20 dB more voice than room. Cheapest
-   and the biggest win; `sounddevice` takes any input device (`OmniLive(mic_device=...)`).
-2. **Level gate** in `feed_audio`: DONE (`MicGate`, section 1d; it is also what keeps the bill down). Only packets above
-   the room's noise floor + `GATE_DB` go up, so background talkers at hall level never reach the cloud; tune with
-   `python -m laptop.voice.omni --meter`.
-3. **Who is that for** (`laptop/voice/addressee.py`, `config.OMNI ADDRESS="smart"`): DONE. Not a wake phrase, not a
-   list of special cases. Three replaceable layers. **Cues**: small independent observers, each giving evidence 0..1
-   with a reason: how close any word SOUNDS to the name (spelling + a sound key: "Blimby" is the name, "bumpy" half of
-   it), a bare "Hey, Blimpy." just before (the server's VAD cuts at the pause, so the sentence arrives as the next
-   turn), how fresh the conversation with Blimpy is (fades exponentially, faster in a loud room; a named turn opens it,
-   reply or no reply), an answer to a question Blimpy asked (one turn, and a question back is no answer), someone near
-   and centred in the FPV eye, the form of the sentence. A new signal is one more `Cue` class. **Room**: the weighted
-   sum is compared with two thresholds that slide with the noise floor: above `accept` it is for Blimpy, below
-   `reject` it is not; a loud room raises the bar, shortens the memory and stops trusting the eye. **Judge**: only what
-   falls between the thresholds is a question of meaning, and a language model answers it with the recent conversation
-   in front of it (`JUDGE="relay"`: qwen3.5-omni-flash, 1.0-1.8 s measured, logged as `addressee_judge`; `"ollama"`:
-   local; `"off"`: the midpoint decides). Checked live on the first run's sentences: "P. How are you feeling?" (the
-   name clipped by the transcriber) yes; "wait, where's the other?", "yeah recording started", "oh, found it", "Peter,
-   can you pass that", and a judge asking the team "how do you localize it?" on the loud floor: no. Clear cases (the
-   name, cold chatter, a cold command on the floor) never reach the judge: no cost, no delay. Stop words and
-   press-to-talk bypass everything. `python -m laptop.voice.addressee "<sentence>" --since-reply 2 --judge relay`
-   shows the cues, the score and the verdict for any sentence; every number is in `addressee.DEFAULTS`
-   (`config.OMNI ADDRESSEE` overrides). Under it: the reply audio and the tool
-   calls of a turn are HELD until the turn is judged (on the relay the transcript arrives after the reply
-   has begun: the old gate let the first words out and, worse, that reply re-opened the follow-up window so the turn
-   approved itself), so a turn that is not for Blimpy makes no sound and runs nothing; the model has a
-   `stay_silent` tool it is told to call instead of saying "mm-hm" (its "no" is final), and its prompt forbids closing
-   replies with a question. No transcript 1.5 s after the first held audio = judged without it. The pilot logs
-   `ignored: <sentence> [why]` and its status line shows `QUIET`/`LOUD` and the count. `ADDRESS="name"` is the strict
-   rule (name, stop word, `p`), `"open"` answers everything.
-   **Several voices, several people** (one open mic, anyone may talk to it). What one mic and a slow camera can and
-   cannot do, measured rather than hoped: (a) two people talking at the same instant cannot be separated; the name inside
-   the mix still wins, the rest is the judge's reading of the words. (b) WHOSE voice: measured with speaker embeddings on
-   the hacker-bay recordings (`python -m laptop.voice.voiceprint`): the same person turn against turn 0.75-0.84, other
-   people up to 0.90. They overlap, so there is NO voice cue; rerun that tool after a change of microphone before
-   building on it. (c) Who in the picture is speaking needs lip motion at ~25 fps on a close face: not with this eye.
-   What vision does give, and is used: the FPV eye counts the people near and centred (`fpv.count_facing`); "said to its
-   face" is full evidence for ONE person and is shared out over a group (three people in front of it = nobody in
-   particular, the judge decides); and the judge is SHOWN the turn: up to `judge_frames=2` of the pictures Blimpy's
-   camera took while the sentence was said (someone turned toward it vs people facing each other), +0.15 s on the relay,
-   unclear turns only. The pictures are kept in the session (`frames/`), so this too replays for free. Protection against
-   being cut off is the floor (above): once a turn is for Blimpy the mic stays shut until it has answered.
-   **Sessions are kept, backtests are free** (`RECORD=True`, `omni --no-record` to opt out): every run writes
-   `data/voice_sessions/<stamp>_<purpose>/` (gitignored): `mic.wav` (all the mic heard, 16 kHz), `turns.jsonl` (per turn:
-   where it is in the wav, the transcript, the exact context the cues saw, the scores, the judge's verdict + the hash of
-   the question it was asked, the verdict). `python tools/addressee_backtest.py --label <dir> --play` = say who each turn
-   was for; `python tools/addressee_backtest.py` replays every session and `tools/fixtures/addressee_cases.jsonl` (the
-   sentences that went wrong live, labelled) through the current code with NO key: recorded judge verdicts are reused
-   while the question is unchanged. `--set accept=0.7,0.8` tries parameters, `--judge off` shows life without a judge,
-   exit code 1 = a labelled turn is judged wrong. Change the rules, run the backtest, only then spend credits.
-   **Rooms**: `ADDRESS_MODE="auto"` reads the mic gate's noise floor (above -45 dBFS = loud, 3 dB hysteresis); `l` in the
-   pilot pins quiet / loud. Judging room = quiet: talk to it normally, name once, then follow-ups. The floor = loud:
-   name or a quick follow-up (the judge settles those), close-talk mic, `GATE_DB_LOUD` from `--calibrate`, and `m` + `p` as the fallback.
-   `python -m laptop.voice.omni --debug` prints how long after `speech_stopped` each transcript came and how many
-   reply packets were held: check it once with the key (the hold costs that much latency on addressed turns).
-3b. **Command safety net**: DONE. Seen live in the rehearsal: "Follow me." was judged for Blimpy, the model said "On it,
-   right behind you." and never called `set_intent`, so nothing moved. Now a turn judged for Blimpy whose reply ended
-   with no tool call goes through the local parser's regex shortcuts (`intent.fast_intent`: follow me, come here, turn
-   left, go up ...) and acts; numeric or long sentences stay with the model. Logged as `[omni] local: ...`, counted in
-   `stats["local_intents"]`; same idea as the stop-word net.
-4. **Press-to-talk**: DONE (`p` in the pilot: the mic goes up in full for ONE command, past the gate and past mute, until
-   you stop talking). Stage mode: `m` once, then `p` before each command. `--mic AirPods --spk Speakers` puts the mic at
-   your ear and the voice on the laptop speakers. Bluetooth catch (measured 2026-09-19 with AirPods Pro): Windows drops
-   the headset's hands-free link a moment after nothing is PLAYED to it, so the mic arrived in 2-3 s bursts (44 of 200
-   packets in 8 s). `bt_keepalive` in omni.py now holds a stream of silence open to the headset's hands-free speaker
-   endpoint whenever the mic is a Bluetooth headset (199 of 200 packets): automatic in the pilot, `--meter` and the CLI
-   (`--no-keepalive` turns it off). The pilot prints "keeping its hands-free link up" at start when it is active.
-   your ear and the voice on the laptop speakers; keep HALF_DUPLEX on.
-A wake word (openWakeWord) is possible but needs a trained "blimpy" model; not worth it before the above.
+A hackathon hall talks all day, and Blimpy must answer only when spoken to, with no wake phrase. Two judging rooms: a
+quiet private one and the loud science-fair floor. One open mic; anyone, judges included, may talk to it.
+
+**1. Get the voice above the room.** A close-talk mic (headset, lapel, phone as mic) is ~20 dB more voice than room:
+the cheapest and biggest win (`--mic AirPods --spk Speakers`; any `sounddevice` input works). Bluetooth catch, measured
+with AirPods Pro: Windows drops the headset's hands-free link when nothing is PLAYED to it, so the mic arrived in bursts
+(44 of 200 packets); `bt_keepalive` in omni.py streams silence to the headset's hands-free endpoint (199 of 200),
+automatic in the pilot, the CLI and `--meter` (`--no-keepalive` = off). The startup verdict warns when a mic delivers
+digital silence (link not up).
+
+**2. Level gate** (`MicGate`, section 1d; also what keeps the bill down): only packets `GATE_DB` above the room's noise
+floor go up. Tune at the venue with `--meter` / `--calibrate`.
+
+**3. Who is that for** (`laptop/voice/addressee.py`, `config.OMNI ADDRESS="smart"`). Three replaceable layers:
+- **Cues**: independent observers, each giving evidence 0..1 and a reason. How close any word SOUNDS to the name
+  (spelling + a sound key: "Blimby" is the name, "bumpy" is half of it) · a bare "Hey, Blimpy." just before (the server's
+  VAD cuts at the pause, so the sentence arrives as the next turn; covers one turn) · how fresh the conversation with
+  Blimpy is (fades exponentially, faster in a loud room; a named turn opens it, reply or no reply) · an answer to a
+  question Blimpy asked (one turn; a question back is no answer) · someone near and centred in the FPV eye, shared out
+  when several people are (`fpv.count_facing`: three people in front of it = nobody in particular) · the form of the
+  sentence (command, request, question to "you"). A new signal is one more `Cue` class.
+- **Room**: the weighted sum meets two thresholds that slide with the noise floor (a 10 dB ramp around
+  `LOUD_FLOOR_DB`=-45 dBFS; `l` in the pilot pins quiet / loud; the status line shows `QUIET`/`LOUD`). At or above
+  `accept`: for Blimpy. At or below `reject`: not, and `reject` is low on purpose, so only chatter with NOTHING
+  pointing at Blimpy is dismissed for free. A loud room raises the bar, shortens the memory, stops trusting the eye.
+- **Judge**: everything in between is a question of meaning. A language model reads the sentence with the recent
+  conversation, how many people are in view and up to `judge_frames`=2 pictures Blimpy's camera took while it was said
+  (someone turned toward it vs people facing each other). `JUDGE="relay"`: qwen3.5-omni-flash, 0.7-1.8 s, +0.15 s with
+  pictures, logged as `addressee_judge`; `"ollama"`: local, words only; `"off"`, a failure or more than 4 s: the
+  `midpoint` decides. Seen live: "P. How are you feeling?" and "so Bloomfield, what can you do?" (the name mangled by
+  the transcriber) yes; "yeah recording started", "wait, where's the other?", "Peter, can you pass that", "how do you
+  localize it?" no.
+
+Stop words (safety) and press-to-talk bypass all of it. `ADDRESS="name"` = name / stop word / `p` only; `"open"` =
+answer everything. Every number is in `addressee.DEFAULTS` (`config.OMNI ADDRESSEE` overrides);
+`python -m laptop.voice.addressee "<sentence>" --since-reply 2 --judge relay` shows cues, score and verdict.
+
+Underneath, in omni.py:
+- **Held until judged.** On the relay the transcript arrives after the reply has begun, so a turn's reply audio and tool
+  calls wait for the verdict: a turn that is not for Blimpy makes no sound and runs nothing (no transcript 1.5 s after
+  the first held audio = judged without the words). The model also has a `stay_silent` tool (its "no" is final) and may
+  not close replies with a question.
+- **The floor.** From the end of a spoken turn until its verdict, mic packets wait on the laptop; if the turn was for
+  Blimpy the mic stays shut until it has answered (tool call, follow-up reply, playback), otherwise the packets go up
+  late and nothing is lost. Seen live: a neighbour's next sentence reached the server first, was taken as a barge-in
+  and cancelled the answer. `--full-duplex` (headphones) keeps real barge-in and has no floor; `p` always passes.
+- **Command safety net.** Seen live: "Follow me." -> "On it, right behind you." and no `set_intent`. A turn judged for
+  Blimpy whose reply ended without a tool call goes through `intent.fast_intent` (follow me, come here, turn left ...)
+  and acts; numeric or long sentences stay with the model. Logged as `[omni] local: ...`.
+
+**Several voices, several people: what was measured.** Two people talking at the same instant cannot be separated by
+one mic; the name inside the mix still wins. WHOSE voice: speaker embeddings on the hacker-bay recordings
+(`python -m laptop.voice.voiceprint`) gave the same person 0.75-0.84 turn against turn and other people up to 0.90.
+They overlap, so there is NO voice cue; rerun that tool after a change of microphone before building on it. Who in the
+picture is speaking needs lip motion at ~25 fps on a close face: not with this eye.
+
+**Sessions are kept, backtests are free** (`RECORD=True`; `omni --no-record` opts out). Every run writes
+`data/voice_sessions/<stamp>_<purpose>/` (gitignored: it is a recording of the room): `mic.wav`, `frames/`, and
+`turns.jsonl` with, per turn, its place in the wav, the transcript, the exact context the cues saw, the scores, the
+judge's verdict and the hash of the question it was asked.
+```powershell
+python tools/addressee_backtest.py --label <session dir> --play   # say who each turn was for (y/n), hearing it
+python tools/addressee_backtest.py                                # replay every session + tools/fixtures/addressee_cases.jsonl, NO key
+python tools/addressee_backtest.py --set accept=0.7,0.8           # try parameters;  --judge off = life without a judge
+python tools/addressee_backtest.py --judge relay                  # after changing the judge's prompt: fresh verdicts, saved for next time
+```
+Recorded judge verdicts are reused while the question is unchanged; exit code 1 = a labelled turn is judged wrong.
+Change the rules, run the backtest, only then spend credits. Do not tune to the fixtures: they are a regression net.
+
+**4. Press-to-talk** (`p` in the pilot): the mic goes up in full for ONE command, past the gate, mute and the floor.
+Stage mode: `m` once, then `p` before each command. Keep HALF_DUPLEX on with laptop speakers.
+
+Venue checklist: `--calibrate` in each room; the status line must read QUIET in the judging room and LOUD on the floor;
+name once, then follow-ups; on the floor expect 1-2 s more on follow-ups (the judge).
+Not built: a wake word (needs a trained "blimpy" model), lip-motion active-speaker detection, mic-array direction.
 
 ## 1c. Positioning data (record / replay / venue)
 
