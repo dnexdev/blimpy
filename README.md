@@ -7,6 +7,7 @@ on the laptop. `laptop/control/ble_gondola.py` is the bridge to the gondola; eve
 
 ```
 firmware/            legacy ESP32-C3 WiFi build (PlatformIO): mixer + failsafe + IMU on the board. Not what flies now (README 3).
+                     i2c_motor_slave/: a second ESP32 driving motors C and D over I2C from the BalloonRobot board (frees 5 pins).
 laptop/config.py     one place for sources, IPs, gains, vehicle physics (PHYS); room geometry is loaded from venues/default.json
 laptop/control/      ble_gondola.py (Bluetooth bridge to the gondola: mixer + failsafe + telemetry) · imu_store.py (IMU samples for everyone, http :5008)
                      protocol.py (shared mixer) · fake_esp32.py (stand-in + simulator) · teleop.py · follow_me.py · pilot.py · behaviors.py · estimator.py · link.py (telemetry watchdog)
