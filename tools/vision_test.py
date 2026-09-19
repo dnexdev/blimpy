@@ -249,7 +249,7 @@ def test_floor_mat():
         good = (cam2 is not None and np.linalg.norm(cam2.position() - cam.position()) < 0.02 and int(saved["n_tags"]) == 4
                 and abs(float(saved["tag_size"]) - S) < 1e-6 and info["n_samples"] >= 8)
         ok &= good
-        print(f"[mat] auto_extrinsics: {info}  {'OK' if good else 'FAIL'}")
+        print(f"[mat] auto_extrinsics: { {k: v for k, v in info.items() if k != 'cam'} }  {'OK' if good else 'FAIL'}")
         # too few frames -> refused with a reason
         clock[0] = 0.0
         none, info = floor.auto_extrinsics(cam0, FakeStream(), S, layout, seconds=0.1, calib_dir=d,

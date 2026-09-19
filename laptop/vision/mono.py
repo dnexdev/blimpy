@@ -25,6 +25,7 @@ from ..control.protocol import STATE_PORT, UdpJson, now_ms
 from . import floor
 from .calib_io import Camera, make_tag_detector
 from .localize import PERSON_Z_M, STALE_MS, draw, nulls
+from .streams import label
 from .streams import Stream
 
 BALLOON_DIAM_M = 2 * config.R_BALLOON   # envelope diameter, m (config.R_BALLOON is the radius; measure after inflating)
@@ -176,6 +177,9 @@ def main():
                               f"Camera (laptop lid?) or mat moved -> re-run tools/calib/extrinsics.py --name {args.name}, or use --auto-calib")
                     elif verdict == "resolve":
                         cam2, info = floor.auto_extrinsics(cam, stream, args.tag_size, layout, seconds=1.0, det=tag_det, calib_dir=args.calib)
+                        if cam2 is None and info.get("cam") is not None:
+                            cam2 = info["cam"]                     # shaky but seen: the median pose beats staying lost
+                            print(f"[mono] camera moved ({guard.last:.0f} px): re-solved from a shaky sample ({info['why']})")
                         if cam2 is not None:
                             cam = cam2; guard.reset()
                             print(f"[mono] camera moved ({guard.last:.0f} px): re-solved. " + floor.describe(cam, info))
@@ -187,6 +191,13 @@ def main():
                 n_frames, t_rate = 0, time.monotonic()
             if guard.bad:                              # stale pose: say so instead of publishing wrong fixes
                 msg = nulls(now_ms(), "drift"); out.send(msg, ("127.0.0.1", args.port))
+                if args.show and frame[0] is not None:       # keep the window live, say why nothing is tracked
+                    img = frame[0].copy()
+                    label(img, f"{args.name}: MAT MOVED ({guard.last and round(guard.last)} px) - re-solving the camera pose: "
+                               f"keep still, nobody in front of the board", (10, 25), 0.7, (0, 0, 255))
+                    cv2.imshow(f"cam {args.name}", cv2.resize(img, None, fx=0.6, fy=0.6))
+                    if cv2.waitKey(1) & 0xFF == ord("q"):
+                        break
                 time.sleep(0.05); continue
             msg2, dets = step(cam, person_det, balloon_det, frame, prev_t, now_ms(), args.stale_ms,
                               balloon_diam=args.balloon_diam)
