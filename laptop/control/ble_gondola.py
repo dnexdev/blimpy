@@ -140,7 +140,10 @@ class SimTransport(Transport):
                 next_imu = t + 1.0 / self.IMU_HZ
                 k = 180.0 / math.pi if self.units == "deg" else 1.0
                 w = self.world
-                self.on_line(f"yaw={w.yaw_gyro * k:.3f} pitch={w.b.tilt * k:.3f} roll=0.000 gx=0.000 gy=0.000 gz={w.gz_meas * k:.3f}")
+                alt = w._tof()                                        # the sim's altimeter model (noise, dropouts); -1 = none
+                scale = {"m": 1.0, "cm": 100.0, "mm": 1000.0}.get(B.get("ALT_UNITS", "m"), 1.0)
+                self.on_line(f"yaw={w.yaw_gyro * k:.3f} pitch={w.b.tilt * k:.3f} roll=0.000 gx=0.000 gy=0.000 gz={w.gz_meas * k:.3f}"
+                             + (f" alt={alt * scale:.1f}" if alt > 0 else " alt=-1"))
             time.sleep(0.005)
 
     def send(self, text):
@@ -174,6 +177,7 @@ class Bridge:
         self.cur, self.mix_state, self.armed = (0.0, 0.0, 0.0, 0.0), {"yawI": 0.0}, False
         self.yaw, self.gz, self.t_imu = 0.0, 0.0, None       # heading integrated from the IMU (or its own yaw field)
         self.pitch = self.roll = 0.0
+        self.alt, self.t_alt = -1.0, None                         # downward ultrasonic in the IMU line (config.BLE ALT_KEYS), m
         self.last_pct, self.last_line, self.t_sent = None, None, -1e9
         self.telem_hz = telem_hz; self.n_tel = 0; self.age_ms = -1
         self.stop = threading.Event()
@@ -193,6 +197,15 @@ class Bridge:
         elif "gz_rad" in d and self.t_imu is not None: self.yaw = wrap(self.yaw + gz * min(0.2, max(0.0, t - self.t_imu)))
         self.gz = gz; self.pitch = d.get("pitch_rad", 0.0); self.roll = d.get("roll_rad", 0.0)
         self.t_imu = t
+        for k in B.get("ALT_KEYS", ()):
+            if k in d:
+                v = float(d[k]) * {"m": 1.0, "cm": 0.01, "mm": 0.001}.get(B.get("ALT_UNITS", "m"), 1.0)
+                self.alt, self.t_alt = (v if v > 0 else -1.0), t
+                break
+
+    def alt_now(self, t):
+        """Telemetry alt (PROTOCOL s3): metres from the sensor to the surface below, -1 when there is no fresh echo."""
+        return round(self.alt, 3) if self.t_alt is not None and (t - self.t_alt) * 1000 < B.get("ALT_FRESH_MS", 300) else -1
 
     def imu_fresh(self, t):
         return self.t_imu is not None and (t - self.t_imu) * 1000 < B["IMU_FRESH_MS"]
@@ -234,12 +247,13 @@ class Bridge:
         t = time.monotonic() if t is None else t
         c = self.cur
         return {"t": now_ms(), "yaw": round(self.yaw, 4), "yr": round(self.gz, 4), "pitch": round(self.pitch, 3),
-                "roll": round(self.roll, 3), "alt": -1, "vbat": -1, "armed": int(self.armed), "age": self.age_ms,
+                "roll": round(self.roll, 3), "alt": self.alt_now(t), "vbat": -1, "armed": int(self.armed), "age": self.age_ms,
                 "mL": round(c[0], 3), "mR": round(c[1], 3), "mS": round(c[2], 3), "mV": round(c[3], 3),
                 "imu_age": -1 if self.t_imu is None else int((t - self.t_imu) * 1000), "ble": int(self.tr.connected)}
 
     def status(self):
         return {"connected": self.tr.connected, "connects": self.tr.connects, "armed": self.armed, "age_ms": self.age_ms,
+                "alt": self.alt_now(time.monotonic()),
                 "setpoint": dict(zip(("vf", "vs", "yr", "vz"), self.sp)), "motors": to_pct(self.cur), "last_line": self.last_line,
                 "imu": imu_store.stats(), "error": getattr(self.tr, "last_error", None)}
 
@@ -285,6 +299,8 @@ def main():
     ap.add_argument("--person", choices=["static", "walk", "route", "random"], default="walk")
     ap.add_argument("--psi0", type=float, default=0.8); ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--ideal", action="store_true", help="with --fake: perfect sensors, no wind")
+    ap.add_argument("--no-tof", action="store_true", help="with --fake: no ultrasonic in the IMU line (default: on, like the real gondola)")
+    ap.add_argument("--no-fpv", action="store_true", help="with --fake --sim: no eye on the balloon in the 5007 state (default: on)")
     ap.add_argument("--probe", action="store_true", help="print raw IMU lines for 10 s and exit")
     ap.add_argument("--motor", nargs=2, metavar=("LETTER", "PCT"), help="bench: run one motor for 2 s, then STOP")
     ap.add_argument("--no-http", action="store_true"); ap.add_argument("--imu-log", action="store_true", help="append samples to data/imu.jsonl")
@@ -292,7 +308,8 @@ def main():
 
     if args.fake:
         from ..sim.world import IDEAL, REAL, World
-        world = World(dict(IDEAL if args.ideal else REAL), person=args.person, psi0=args.psi0, seed=args.seed, epoch=time.monotonic())
+        world = World(dict(IDEAL if args.ideal else REAL, tof=not args.no_tof, fpv=not args.no_fpv), person=args.person, psi0=args.psi0,
+                      seed=args.seed, epoch=time.monotonic())
         tr = SimTransport(world, publish_state=args.sim, imu_units=B["GYRO_UNITS"])
     else:
         tr = BleakTransport(args.name)

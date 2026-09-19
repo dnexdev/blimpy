@@ -32,11 +32,18 @@ REAL = dict(
     gust_rms=0.06, gust_tau=4.0, lift_drift_n=0.006, lift_drift_period=240.0,
     # hardware imperfections: motor-to-motor thrust spread, prop spin-up, S motor not exactly through the centre
     motor_gain=(1.0, 0.92, 1.05, 0.96), motor_tau=0.06, s_yaw_arm=0.03,
+    # the eye on the balloon (laptop/vision/fpv.py): YOLO on the gondola camera's stream, 10 Hz, ~250 ms behind; range from
+    # the person's height in the frame (~8 %), unknown (box cut) closer than fpv_cut_m. fpv=False here so the older scenarios
+    # stay bit-identical; the eye scenarios and the BLE bridge's simulated robot turn it on.
+    fpv=False, fpv_hz=10, fpv_latency=0.25, fpv_hfov=62.0, fpv_vfov=48.0, fpv_pitch=15.0, fpv_bearing_noise=0.02,
+    fpv_range_noise=0.08, fpv_drop_p=0.03, fpv_cut_m=1.1,
+    vision=True,          # False = no room camera at all (no balloon / person fixes on 5007): eye + altimeter only
 )
 IDEAL = dict(REAL, vision_latency=0.0, vision_jitter=0.0, balloon_noise=0.0, z_noise=0.0, person_noise=0.0,
              person_drop_p=0.0, balloon_drop_p=0.0, person_outlier_p=0.0, telem_latency=0.0, telem_loss=0.0,
              cmd_latency=0.0, cmd_loss=0.0, gyro_bias=0.0, gyro_noise=0.0, tof_noise=0.0, tof_drop_p=0.0, tof_false_p=0.0, gust_rms=0.0, lift_drift_n=0.0,
-             motor_gain=(1.0, 1.0, 1.0, 1.0), motor_tau=0.0, s_yaw_arm=0.0)
+             motor_gain=(1.0, 1.0, 1.0, 1.0), motor_tau=0.0, s_yaw_arm=0.0,
+             fpv_latency=0.0, fpv_bearing_noise=0.0, fpv_range_noise=0.0, fpv_drop_p=0.0)
 
 
 class Balloon:
@@ -222,7 +229,7 @@ class World:
     the laptop's JSON; `poll_state()` / `poll_telem()` hand back the datagrams that would arrive now."""
 
     def __init__(self, realism=REAL, person="walk", psi0=0.8, wind=(0.0, 0.0), seed=0, epoch=0.0,
-                 arena=config.ARENA, obstacles=None, start=(0.0, 0.0, 1.5), person_speed=0.5, person_start=None):
+                 arena=config.ARENA, obstacles=None, start=(0.0, 0.0, 1.5), person_speed=0.5, person_start=None, person_arena=None):
         self.r = dict(realism)
         self.rng = random.Random(seed)
         self.rng_tof = random.Random(seed * 7919 + 1)   # own stream: the ToF must not reshuffle gusts / dropouts / the person for seeded runs
@@ -233,7 +240,7 @@ class World:
         self.b = Balloon(*start, psi0, self.r["motor_gain"], self.r["motor_tau"], self.r["s_yaw_arm"])
         self.wind = Wind(wind, self.r["gust_rms"], self.r["gust_tau"], self.rng)
         self.wind_now = tuple(wind)
-        self.person = Person(person, self.rng, arena, person_speed)
+        self.person = Person(person, self.rng, person_arena or arena, person_speed)   # person_arena: keep the walk off the walls
         if person_start is not None: self.person.p = [person_start[0], person_start[1], 1.4]
         # "firmware" state
         self.sp, self.arm, self.rx_t = (0.0, 0.0, 0.0, 0.0), False, None
@@ -244,13 +251,14 @@ class World:
         self.age_ms = -1
         # queues
         self.cmd_q, self.state_q, self.telem_q = [], [], []
-        self.next_vision = self.next_telem = 0.0
+        self.next_vision = self.next_telem = self.next_fpv = 0.0
         self.person_drop_until = self.balloon_drop_until = -1.0
         # stats
         self.collisions = 0; self.grazes = 0; self._touching = set(); self.collision_log = []
-        self.min_clearance = 9.0; self.min_person_dist = 9.0
+        self.min_clearance = 9.0; self.min_person_dist = 9.0; self.max_impact = 0.0   # m/s into a wall / obstacle, worst
         self.arm_events = 0; self.disarm_events = 0
         self.tof_valid = self.tof_total = 0
+        self.fpv_seen = self.fpv_total = 0
 
     # ------------------------------------------------------------------ inputs
     def command(self, d):
@@ -304,6 +312,9 @@ class World:
         if self.t >= self.next_vision:
             self.next_vision += 1.0 / r["vision_hz"]
             self._vision_frame()
+        if r.get("fpv") and self.t >= self.next_fpv:
+            self.next_fpv += 1.0 / r["fpv_hz"]
+            self._fpv_frame()
         if self.t >= self.next_telem:
             self.next_telem += 1.0 / r["telem_hz"]
             if self.rx_t is not None and self.t - self.rx_t < 2.0:      # firmware: telemetry only while commanded
@@ -326,7 +337,7 @@ class World:
                 b.x -= d * nx; b.y -= d * ny
                 vn = b.vx * nx + b.vy * ny
                 (hits if vn < -self.BUMP_V else grazes).add(key)
-                if vn < 0: b.vx -= 1.2 * vn * nx; b.vy -= 1.2 * vn * ny
+                if vn < 0: self.max_impact = max(self.max_impact, -vn); b.vx -= 1.2 * vn * nx; b.vy -= 1.2 * vn * ny
         for i, (cx, cy, cr) in enumerate(self.obstacles):
             dx, dy = b.x - cx, b.y - cy
             dist = math.hypot(dx, dy)
@@ -337,7 +348,7 @@ class World:
                 b.x -= d * nx; b.y -= d * ny
                 vn = b.vx * nx + b.vy * ny
                 (hits if vn < -self.BUMP_V else grazes).add(i)
-                if vn < 0: b.vx -= 1.2 * vn * nx; b.vy -= 1.2 * vn * ny
+                if vn < 0: self.max_impact = max(self.max_impact, -vn); b.vx -= 1.2 * vn * nx; b.vy -= 1.2 * vn * ny
         for key in (("floor", b.z - 0.6 - 0.0, 1), ("ceil", 2.8 - b.z, -1)):
             if key[1] < 0:
                 hits.add(key[0]); b.z -= key[1] * key[2]
@@ -353,6 +364,8 @@ class World:
 
     def _vision_frame(self):
         r, b, rng, t = self.r, self.b, self.rng, self.t
+        if not r.get("vision", True):
+            return                                              # no room camera: nothing on 5007 but the eye
         if t > self.balloon_drop_until and rng.random() < r["balloon_drop_p"]:
             self.balloon_drop_until = t + rng.uniform(*r["balloon_drop_s"])
         if t > self.person_drop_until and rng.random() < r["person_drop_p"]:
@@ -371,6 +384,24 @@ class World:
             person = [round(p[0] + g(r["person_noise"]), 3), round(p[1] + g(r["person_noise"]), 3), p[2]]
         msg = {"t": self._ms(t), "balloon": balloon, "person": person, "person_id": 1, "src": "sim"}
         self.state_q.append((t + r["vision_latency"] + r["vision_jitter"] * rng.uniform(-1, 1), msg))
+
+    def _fpv_frame(self):
+        """The eye on the balloon: where the person is in the gondola camera (bearing / elevation / range), from truth.
+        Camera at the balloon centre looking along the heading, tilted down fpv_pitch."""
+        r, b, rng, t, p = self.r, self.b, self.rng, self.t, self.person.p
+        dx, dy, dz = p[0] - b.x, p[1] - b.y, p[2] - b.z
+        horiz = math.hypot(dx, dy); dist = math.sqrt(horiz * horiz + dz * dz)
+        bearing = wrap(math.atan2(dy, dx) - b.psi)
+        elev = math.atan2(dz, horiz) + math.radians(r["fpv_pitch"])      # measured from the (tilted) camera axis
+        obs = None
+        if abs(bearing) < math.radians(r["fpv_hfov"]) / 2 * 0.95 and abs(elev) < math.radians(r["fpv_vfov"]) / 2 * 0.95 \
+                and not (r["fpv_drop_p"] and rng.random() < r["fpv_drop_p"]):
+            g = lambda s: rng.gauss(0, s) if s > 0 else 0.0
+            rng_m = None if dist < r["fpv_cut_m"] else round(dist * (1 + g(r["fpv_range_noise"])), 3)
+            obs = {"bearing": round(bearing + g(r["fpv_bearing_noise"]), 4), "elev": round(elev, 4), "range": rng_m, "conf": 0.9, "box": None}
+        self.fpv_total += 1; self.fpv_seen += 1 if obs else 0
+        msg = {"t": self._ms(t), "balloon": None, "person": None, "fpv": obs, "src": "sim"}
+        self.state_q.append((t + r["fpv_latency"], msg))
 
     def _telem_frame(self):
         r, c = self.r, self.cur

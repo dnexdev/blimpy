@@ -14,9 +14,14 @@ heading             : gyro yaw from telemetry + an offset. The offset is learned
 gyro bias           : the slow drift of that offset between manoeuvres IS the gyro bias; it is fitted from the
                       offset at the end of successive pushes, fed forward, and exposed (`bias_hat`) so the
                       controller can hold a true zero yaw rate.
-height              : the downward ToF on the gondola (telemetry `alt`) owns z while its readings are fresh and
-                      agree with the estimate (update_telem); a hand / table / person under the lens is rejected by a
-                      jump gate and vision z takes over. No ToF (alt = -1): vision z as before.
+height              : the downward ToF / ultrasonic on the gondola (telemetry `alt`) owns z while its readings are
+                      fresh and agree with the estimate (update_telem); a hand / table / person under the lens is
+                      rejected by a jump gate and vision z takes over. No ToF (alt = -1): vision z as before.
+eye on the balloon  : fix_heading(psi) sets the heading directly when the eye sees the person AND the room camera
+                      sees both (bearing in the image + bearing in the world = heading), no manoeuvre needed.
+relative mode       : seed_relative() gives a pseudo position (0, 0, z from the altimeter) when there is NO room
+                      camera, so the loop can arm and the eye + altimeter fly follow / rotate / hover-still. `rel`
+                      is True until a real fix arrives; x/y and heading are meaningless meanwhile.
 """
 import cmath, math, time
 from collections import deque
@@ -60,6 +65,7 @@ class StateEstimator:
         self.bias_hat = 0.0
         self.bias_ok = False             # True once the bias has been fitted from >= 3 pushes
         self.contact = False             # set by the caller when the envelope is (nearly) touching something
+        self.rel = False                 # True: p is a pseudo position (no room camera), only z is real
         # ToF altimeter (telemetry alt)
         self.alt_raw = None              # last telemetry alt as received (m, -1 = none), or None
         self.alt_rejects = 0             # readings refused by the gate (hand / table / person under the lens)
@@ -94,7 +100,8 @@ class StateEstimator:
     # ------------------------------------------------------------------ vision
     def update_balloon(self, p, t_ms):
         p = [float(x) for x in p]
-        if self.p is None:
+        if self.p is None or self.rel:
+            self.rel = False
             self.p, self.t = p, t_ms
             if self.alt_ok and abs(self._z_tof - p[2]) < self.tof_jump_m:
                 self.p[2] = self._z_tof                     # the ToF cannot give xy, but its z is the better one
@@ -155,6 +162,26 @@ class StateEstimator:
             self.p[2] = pz + self.alpha_z * r
             self.v[2] = pv + self.beta_z / dt * r
         self._z_tof, self._t_alt = z, self._t_now
+
+    def seed_relative(self):
+        """No room camera: start from (0, 0, z) with z from the altimeter so the loop can arm. False until a reading is in."""
+        if self.p is not None or not self.alt_ok:
+            return self.p is not None
+        self.p, self.v, self.t, self.rel = [0.0, 0.0, self._z_tof], [0.0, 0.0, 0.0], self._t_alt_ms, True
+        self._pm = [0.0, 0.0]
+        return True
+
+    def fix_heading(self, psi, k=0.5):
+        """A direct heading observation (the eye sees the person, the room camera sees both): move the offset toward
+        it and treat the heading as confirmed. Returns the correction applied (rad)."""
+        if self.yaw_gyro is None:
+            return 0.0
+        step = k * wrap(psi - self.yaw_gyro - self.offset)
+        self._bump_offset(step)
+        self._z *= cmath.exp(-1j * step); self._a *= cmath.exp(1j * step); self._ag *= cmath.exp(1j * step)
+        self.head_ok = self.head_confident = True
+        self._t_corr = self._t_motion if self._t_motion is not None else 0.0
+        return step
 
     @property
     def alt_ok(self):

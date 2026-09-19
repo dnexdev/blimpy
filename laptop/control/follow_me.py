@@ -245,13 +245,14 @@ def main():
     try:
         while True:
             t, now = time.monotonic(), now_ms()
-            r = state_in.recv_latest()
-            if r:
-                s = r[0]; log.state(s)
+            for s, _ in state_in.recv_all():                  # every row: eye rows are interleaved with the vision rows
+                log.state(s)
                 if s.get("balloon"):
                     est.update_balloon(s["balloon"], s.get("t", now)); t_balloon = now
                 if s.get("person"):
                     beh.on_person(s["person"], s.get("t"))
+                if s.get("fpv"):
+                    beh.on_fpv(s["fpv"], s.get("t"))
             for m, _ in tel_in.recv_all(only_from=args.esp):          # every frame: the one that says "failsafe" must not be skipped
                 est.update_telem(m.get("yaw", 0.0), m.get("yr", 0.0), m.get("alt"), m.get("t"), now=t); log.telem(m)
                 if (warn := wd.telem(m, t, armed)):

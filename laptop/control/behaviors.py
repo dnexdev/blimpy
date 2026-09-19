@@ -4,13 +4,18 @@ the simulator or the real balloon.
 
 Modes (one at a time): HOVER, FOLLOW, WANDER, GO_TO, ROTATE, DANCE.
 Concurrent: timers, pomodoro, focus guard, altitude offset. Each may speak via the `say` callback.
+The eye on the balloon (on_fpv, laptop/vision/fpv.py): FOLLOW yaws on the bearing it sees and, with a room camera too,
+fixes the heading estimate from it at once (no learning push). Without a room camera (est.rel, pilot --relative) the eye
+plus the altimeter fly FOLLOW / ROTATE / HOVER-still; GO_TO and WANDER are refused (no x/y).
 """
 import math, random, time
 from .. import config
 from .protocol import clamp, wrap
-from .follow_me import AltHold, clearance, follow_cmd, nearest_surface, room_ahead, velocity_cmd
+from .follow_me import AltHold, clearance, follow_cmd, lin, nearest_surface, room_ahead, velocity_cmd
 
 G = config.FOLLOW
+F = config.FPV
+REV_EFF = config.PHYS["REV_EFF"]
 
 
 class Behaviors:
@@ -37,6 +42,10 @@ class Behaviors:
         self.pomo = None                                    # dict(phase, deadline, work, brk)
         self.focus = False; self.focus_last_nag = 0.0; self.focus_absent_since = None
         self.focus_report = None; self.focus_bad_n = 0   # desk-camera reports (laptop/voice/omni_watch.py), consecutive 'not working'
+        self.fpv = None; self.t_fpv = -1e9                  # the eye on the balloon: last observation (bearing / elev / range)
+        self.fpv_r = None; self.fpv_rr = 0.0; self._t_fpv_r = -1e9   # range track (alpha-beta): closing speed without a world velocity
+        self._t_fix = -1e9                                  # last direct heading fix from the eye + room camera
+        self.search_dir = 1                                 # eye lost the person: yaw slowly toward where it last saw them
 
     # ------------------------------------------------------------ inputs
     def on_person(self, xyz, t_ms=None):
@@ -66,6 +75,31 @@ class Behaviors:
         self._person_n = 0 if self._person_n >= 3 else self._person_n
         self.person, self.t_person, self._t_person_meas = xyz, now, t_meas
 
+    def on_fpv(self, obs, t_ms=None):
+        """The eye on the balloon saw the person: bearing (+ = left), elev, range (None = box cut by the frame = close).
+        The range gets an alpha-beta track so the closing speed is known without any world-frame velocity."""
+        if not obs or obs.get("bearing") is None: return
+        now = self.now()
+        self.fpv, self.t_fpv = obs, now
+        if abs(obs["bearing"]) > 0.15: self.search_dir = 1 if obs["bearing"] > 0 else -1
+        r = obs.get("range")
+        if r is None:
+            self.fpv_r, self.fpv_rr = None, 0.0
+        else:
+            dt = now - self._t_fpv_r
+            if self.fpv_r is None or dt > 1.0 or dt <= 0:
+                self.fpv_r, self.fpv_rr = float(r), 0.0
+            else:
+                pred = self.fpv_r + self.fpv_rr * dt
+                res = float(r) - pred
+                self.fpv_r = pred + 0.4 * res
+                self.fpv_rr = clamp(self.fpv_rr + 0.12 / dt * res, -1.5, 1.5)
+            self._t_fpv_r = now
+
+    def fpv_ok(self, now=None):
+        now = self.now() if now is None else now
+        return self.fpv is not None and now - self.t_fpv < F["LOST_MS"] / 1000
+
     def on_focus_report(self, rep):
         """Focus watcher (OMNI model looking at the desk camera every few seconds):
         {"present": bool, "working": bool, "phone": bool, "activity": "scrolling on a phone"}."""
@@ -80,6 +114,8 @@ class Behaviors:
         k = it.get("intent", "none"); reply = it.get("reply", "")
         if k == "follow_me":   self._set("FOLLOW")
         elif k == "hover":     self._set("HOVER")
+        elif k in ("wander", "go_to") and getattr(est, "rel", False):
+            return "I can't see the room from up here, only you. I can follow you, turn, or hold still."
         elif k == "wander":    self._set("WANDER"); self.wander_wp = None
         elif k == "go_to":
             tgt = it.get("target", "me")
@@ -115,10 +151,17 @@ class Behaviors:
         vf = vs = yr = vz = 0.0; note = self.mode
         if est.p is None:
             return 0.0, 0.0, 0.0, 0.0, "no balloon"
+        rel = getattr(est, "rel", False)                         # no room camera: x/y and heading are meaningless
         person_ok = self.person is not None and now - self.t_person < G["PERSON_LOST_MS"] / 1000
+        eye = self.fpv_ok(now)
+        if eye and person_ok and not rel and est.yaw_gyro is not None and now - self.t_person < 0.4 and now - self._t_fix > 0.2:
+            rx, ry = self.person[0] - est.p[0], self.person[1] - est.p[1]     # the eye sees the person, the room sees both:
+            if math.hypot(rx, ry) > 0.5:                                        # heading = world bearing - bearing in the image
+                est.fix_heading(wrap(math.atan2(ry, rx) - self.fpv["bearing"]), k=0.3); self._t_fix = now
         confident = est.head_ok and (getattr(est, "head_confident", True) or self.acq_n >= 6)
-        have_heading = est.psi is not None and confident         # until a real push has taught the heading: acquire
-        est.contact = clearance(est.p, self.obstacles, self.arena) < 0.15   # pushing on a wall teaches nothing
+        have_heading = est.psi is not None and confident and not rel   # until a real push has taught the heading: acquire
+        est.contact = (not rel) and clearance(est.p, self.obstacles, self.arena) < 0.15   # pushing on a wall teaches nothing
+        if rel and self.mode in ("GO_TO", "WANDER"): self._set("HOVER")
         z_target = G["Z_HOLD"] + self.z_offset
         # when moving somewhere other than toward the person, the person is an obstacle too (body ~0.35 m)
         obs_p = self.obstacles + ([(self.person[0], self.person[1], 0.35)] if person_ok else [])
@@ -129,17 +172,25 @@ class Behaviors:
         self.v_tw = self._twitch(est, now)
         kw["v_extra"] = kwp["v_extra"] = self.v_tw
         hold_z = True
-        if est.psi is not None and not confident:
+        if est.psi is not None and not confident and not rel:
             vf, vs = self._acquire(est, now); note = f"{self.mode} (learning heading: {self.acq_note})"
             vz = self.alt.cmd(z_target, est, now)
             self._focus_guard(now, person_ok)
             return vf, vs, 0.0, vz, note                        # no rotating / travelling until we know which way is which
 
         if self.mode == "FOLLOW":
-            if person_ok and have_heading:
+            if eye:
+                vf, yr, note = self._follow_eye(now); self.hold_xy = None        # the eye owns the yaw (seen directly)
+                if person_ok and have_heading:                                    # room camera too: the world-frame law moves us
+                    pv = self.person_v if math.hypot(*self.person_v) > 0.1 else (0.0, 0.0)   # (walls, dodging, the person's speed)
+                    vf, vs, _, vz, d = follow_cmd(est, self.person, person_v=pv, v_max=vcap, **kw); hold_z = False
+                    note = f"FOLLOW eye+room d={d['dist']:.2f}"
+            elif person_ok and have_heading:
                 pv = self.person_v if math.hypot(*self.person_v) > 0.1 else (0.0, 0.0)   # standing: no feed-forward noise
                 vf, vs, yr, vz, d = follow_cmd(est, self.person, person_v=pv, v_max=vcap, **kw); hold_z = False; self.hold_xy = None
                 note = f"FOLLOW d={d['dist']:.2f}"
+            elif rel:
+                yr = F["SEARCH_YR"] * self.search_dir; note = "FOLLOW (eye lost the person: searching)"
             elif have_heading:
                 vf, vs = self._hold(est); note = "FOLLOW (person lost -> hold)"
         elif self.mode == "GO_TO":
@@ -347,6 +398,24 @@ class Behaviors:
         return self.twitch_v
 
     # ------------------------------------------------------------ helpers
+    def _follow_eye(self, now):
+        """FOLLOW on the eye alone: yaw the bearing to zero; forward/back on the range, braking on the tracked closing
+        speed. No walls, no sideways: that is what the room camera adds when it is there."""
+        o = self.fpv
+        yr = clamp(F["K_PSI"] * o["bearing"], -G["YR_CAP"], G["YR_CAP"])
+        r = self.fpv_r if self.fpv_r is not None else 0.9            # box cut by the frame = closer than we can measure
+        err = r - G["D_FOLLOW"]                                       # + = too far
+        sp = 0.0
+        if abs(err) > G["D_DEADBAND"]:
+            sp = clamp(G["K_P"] * err, -G["V_DES_MAX"], G["V_DES_MAX"])
+            brake = math.sqrt(2 * G["A_BRAKE"] * max(0.0, abs(err) - G["D_DEADBAND"] / 2))
+            sp = math.copysign(min(abs(sp), brake), sp)
+        u = G["K_V"] * (sp + self.fpv_rr)                              # closing speed = -d(range)/dt
+        if u < 0: u /= REV_EFF
+        vf = lin(u, G["VF_CAP"], boost=False)
+        if abs(o["bearing"]) > 0.6: vf = min(vf, 0.0)                 # facing away: turn first, only back off meanwhile
+        return vf, yr, f"FOLLOW eye b={math.degrees(o['bearing']):+.0f} r={'%.2f' % r if self.fpv_r is not None else 'close'}"
+
     def _hold(self, est):
         """Hold position: the spot where we entered HOVER / lost the person / started rotating. A pure velocity hold
         would integrate every gust and every heading twitch into a slow walk across the room."""

@@ -37,6 +37,9 @@ def main():
     ap.add_argument("--omni-cam", default=None, metavar="SPEC",
                     help=f"camera Blimpy sees through in omni mode (default config.OMNI['CAMERA'] = {config.OMNI['CAMERA']!r}; 'none' = ears only)")
     ap.add_argument("--log", nargs="?", const="", default=None, metavar="NAME", help="record state/telemetry/commands to data/positioning/<ts>_pilot[_NAME]/ (laptop/positioning)")
+    ap.add_argument("--fpv", default=config.FPV["SOURCE"], metavar="SPEC", help="the eye on the balloon: ESP32-CAM stream URL or camera index (default config.FPV SOURCE); it is also what Blimpy sees in omni mode unless --omni-cam says otherwise")
+    ap.add_argument("--no-fpv", action="store_true")
+    ap.add_argument("--relative", action="store_true", default=config.FPV["RELATIVE"], help="no room camera: fly on the eye + ultrasonic (follow / rotate / hover-still; go_to / wander refused)")
     args = ap.parse_args()
     args.esp = resolve(args.esp)
 
@@ -49,6 +52,11 @@ def main():
     reports = []                      # focus-watcher reports from the cloud eyes
 
     intent = stt = None
+    eye = None
+    if args.fpv and not args.no_fpv:
+        from ..vision.fpv import FpvEye
+        try: eye = FpvEye(args.fpv); print(f"[pilot] eye on the balloon: {args.fpv} (YOLO {config.FPV['WEIGHTS'] or config.YOLO_PERSON})")
+        except Exception as e: print(f"[pilot] no eye ({e}); following needs the room camera")
 
     def load_local():
         nonlocal intent, stt, rec, local_ok
@@ -74,17 +82,19 @@ def main():
     if mode == "omni":
         from ..voice.omni import OmniLive
         from ..voice.omni_watch import FocusWatcher
-        spec = args.omni_cam or config.OMNI["CAMERA"]
-        if spec and str(spec).lower() != "none":
+        spec = args.omni_cam or ("eye" if eye is not None else config.OMNI["CAMERA"])
+        frame_fn = None
+        if spec == "eye": frame_fn = eye.frame                  # Blimpy sees through its own eye (one stream client only)
+        elif spec and str(spec).lower() != "none":
             from ..vision.streams import Stream
             try: cam = Stream(spec, "eyes").wait_first(5)
             except Exception as e: print(f"[pilot] no eyes ({e}); omni runs ears-only")
-        frame_fn = (lambda: cam.latest()[0]) if cam else None
+            frame_fn = (lambda: cam.latest()[0]) if cam else None
         try:
             omni = OmniLive(on_intent=omni_intent, frame_fn=frame_fn, fps=config.OMNI["FPS"],
                             half_duplex=config.OMNI["HALF_DUPLEX"], purpose="pilot").start()
-            print(f"[pilot] OMNI live: {omni.model} ({'eyes + ears' if cam else 'ears only'}). Just talk.")
-            if cam: watcher = FocusWatcher(frame_fn, on_report=reports.append, interval=config.OMNI["WATCH_S"])
+            print(f"[pilot] OMNI live: {omni.model} ({'eyes (' + spec + ') + ears' if frame_fn else 'ears only'}). Just talk.")
+            if frame_fn: watcher = FocusWatcher(frame_fn, on_report=reports.append, interval=config.OMNI["WATCH_S"])
         except Exception as e:
             print(f"[pilot] OMNI unavailable ({e}); " + ("falling back to local push-to-talk (v)" if local_ok else "typed commands only"))
             omni = None
@@ -100,7 +110,7 @@ def main():
     wd = TelemWatchdog()                          # telemetry silence / board-side failsafe -> disarm (laptop/control/link.py)
     beh = Behaviors(say)
     armed, nudge_end, recording = False, 0.0, False
-    t_balloon = 0
+    t_balloon = 0; t_eye = None
 
     def run_text(text):
         if not text.strip(): return
@@ -128,21 +138,25 @@ def main():
     try:
         while True:
             t, now = time.monotonic(), now_ms()
-            r = state_in.recv_latest()
-            if r:
-                s = r[0]; log.state(s)
+            for s, _ in state_in.recv_all():                  # every row: eye rows are interleaved with the vision rows
+                log.state(s)
                 if s.get("balloon"): est.update_balloon(s["balloon"], s.get("t", now)); t_balloon = now
                 if s.get("person"): beh.on_person(s["person"], s.get("t"))
+                if s.get("fpv"): beh.on_fpv(s["fpv"], s.get("t"))          # the eye from the sim or a standalone fpv.py
+            if eye is not None:
+                obs, t_obs = eye.latest()
+                if obs is not None and t_obs != t_eye: beh.on_fpv(obs, t_obs); t_eye = t_obs
             for m, _ in tel_in.recv_all(only_from=args.esp):          # every frame: the one that says "failsafe" must not be skipped
                 est.update_telem(m.get("yaw", 0.0), m.get("yr", 0.0), m.get("alt"), m.get("t"), now=t); log.telem(m)
                 if (warn := wd.telem(m, t, armed)): print(f"\n[pilot] {warn}")
+            if args.relative and est.p is None and est.seed_relative(): print("\n[pilot] relative mode: no room camera, flying on the eye + altimeter")
 
             while (k := keys.poll()) is not None:
                 if k == " ":
                     armed = not armed; log.event("arm", armed=armed)
                     if armed:
                         wd.arm(t); beh.on_armed(est)
-                        if not est.head_ok and not nudge_ok(est, beh.obstacles, beh.arena): say("I need more room to learn which way I'm facing.")
+                        if not est.head_ok and not est.rel and not nudge_ok(est, beh.obstacles, beh.arena): say("I need more room to learn which way I'm facing.")
                 elif k == "n" and armed: est.forget_heading(); beh.acq_i, beh.acq_t0, beh.acq_n = 0, None, 0
                 elif k == "v" and local_ok: voice_toggle()
                 elif k == "m" and omni is not None: omni.muted = not omni.muted; print(f"\n[pilot] cloud mic {'MUTED' if omni.muted else 'open'}")
@@ -166,7 +180,9 @@ def main():
                 reason = wd.check(armed, t)
                 if reason:
                     armed, note = False, f"{reason} -> disarm"; log.event("disarm", reason=reason); say(f"Motors off. {reason}.")
-                elif est.p is None or now - t_balloon > G["BALLOON_LOST_MS"]:
+                elif est.rel and not est.alt_ok:
+                    armed, note = False, "ALTIMETER LOST -> disarm"; log.event("disarm", reason="altimeter lost")
+                elif not est.rel and (est.p is None or now - t_balloon > G["BALLOON_LOST_MS"]):
                     armed, note = False, "BALLOON LOST -> disarm"; log.event("disarm", reason="balloon lost")
                 else:
                     vf, vs, yr, vz, note = beh.step(est)
@@ -174,7 +190,8 @@ def main():
             cmd = make_cmd(vf, yr, vz, armed, vs)
             cmd_out.send(cmd, (args.esp, CMD_PORT)); log.cmd(cmd)
 
-            pos = "(%.2f,%.2f,%.2f)" % tuple(est.p) if est.p else "none"
+            pos = ("rel z=%.2f" % est.p[2] if est.rel else "(%.2f,%.2f,%.2f)" % tuple(est.p)) if est.p else "none"
+            if beh.fpv_ok(): pos += " eye %+.0f%s" % (math.degrees(beh.fpv["bearing"]), "" if beh.fpv_r is None else " %.1fm" % beh.fpv_r)
             psi = f"{math.degrees(est.psi):+4.0f}" if est.psi is not None else "n/a"
             cloud = "" if omni is None else (" OMNI" + ("m" if omni.muted else "") if omni.ok else " omni-DOWN")
             print(f"[pilot] {'ARM ' if armed else 'safe'} {note:28s} vf={vf:+.2f} vs={vs:+.2f} yr={yr:+.2f} vz={vz:+.2f} | {pos} psi={psi} z:{est.z_src} "
@@ -187,6 +204,7 @@ def main():
         if watcher is not None: watcher.stop()
         if omni is not None: omni.stop()
         if cam is not None: cam.stop()
+        if eye is not None: eye.stop()
         keys.close(); log.close(); print("\n[pilot] disarmed, bye" + (f"   recorded {log.n} rows -> {log.path}" if log else ""))
 
 

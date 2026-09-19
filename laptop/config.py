@@ -15,12 +15,31 @@ ROTATE = {"A": 0, "B": 90}              # degrees clockwise applied to each stre
 #     Team key from the organisers' e-mail -> env YIBU_API_KEY (or OMNI_API_KEY), never in the repo. Every call is logged
 #     to data/omni_usage.jsonl in the organisers' schema; tools/omni_report.py builds the report they want back.
 OMNI = dict(
-    CAMERA="0",              # what Blimpy SEES in conversation (laptop webcam facing the user at the desk). Not one of SOURCES
-                             # above if localize.py is running on this laptop: Windows gives a webcam to ONE process only.
+    CAMERA="0",              # what Blimpy SEES in conversation when there is no eye on the balloon (laptop webcam at the desk).
+                             # With FPV SOURCE set (or pilot --fpv) Blimpy sees through its own eye; --omni-cam overrides.
+                             # Not one of SOURCES above if localize.py runs on this laptop: Windows gives a webcam to ONE process.
     FPS=1.0,                 # frames per second sent to the realtime model (provider recommends 1)
     WATCH_S=6.0,             # focus watcher: seconds between "what is the user doing" looks (laptop/voice/omni_watch.py)
     HALF_DUPLEX=True,        # laptop speakers + laptop mic (no echo cancellation): mute the mic while Blimpy talks.
                              # False with headphones or a conference speaker -> real barge-in.
+)
+
+# --- Eye on the balloon (laptop/vision/fpv.py): the Arduino/ESP32 camera on the gondola streams over the hotspot. It is
+#     what Blimpy SEES in conversation (OMNI) and how it finds the person to follow: bearing straight from the image, so
+#     no heading calibration; range from the person's height in the frame. The room camera (SOURCES A, mono.py) stays
+#     for x/y (go_to, wander, hover-in-place); without it set RELATIVE=True (or pilot --relative): eye + ultrasonic only. ---
+FPV = dict(
+    SOURCE=None,            # e.g. "http://192.168.137.40:81/stream" (ESP32-CAM CameraWebServer sketch). None = no eye
+    HFOV_DEG=62.0,          # horizontal field of view of that camera (OV2640 ~62; measure: README 3c)
+    PITCH_DEG=15.0,         # camera tilted DOWN this much from the balloon's forward axis (chest-height person at 1.5 m)
+    PERSON_H=1.65,          # m, standing person head to feet: range = f * PERSON_H / box height (px); ~5-10 % noisy
+    LAG_MS=250,             # WiFi + JPEG latency of the stream (frames are stamped on arrival)
+    LOST_MS=1500,           # no person in the eye for this long -> FOLLOW holds still
+    HZ=10,                  # detections per second (YOLO on the laptop)
+    K_PSI=1.0,              # yaw rate per rad of bearing (the person is seen directly; FOLLOW K_PSI is for the estimated heading)
+    SEARCH_YR=0.35,         # no room camera and the eye lost the person: yaw this fast toward where it last saw them
+    RELATIVE=False,         # True = no room camera: follow / rotate / hover-still / timers work, go_to / wander are refused
+    WEIGHTS=None,           # YOLO weights for the eye (None = YOLO_PERSON below)
 )
 
 # --- Network ---
@@ -41,6 +60,9 @@ BLE = dict(
     GYRO_UNITS="deg",     # "deg" (deg/s and degrees, most Arduino IMU libraries) or "rad"
     GYRO_SIGN=1,          # -1 if turning the gondola counter-clockwise (seen from above) gives a NEGATIVE gz
     IMU_FRESH_MS=200,     # yaw-rate feedback in the mixer only with a sample younger than this
+    ALT_KEYS=("alt", "range", "dist", "sonar", "us"),   # the ultrasonic (downward) in the same IMU line, first key found wins
+    ALT_UNITS="cm",       # "cm" | "mm" | "m" as the firmware prints it; <= 0 = no echo. Telemetry alt is metres, -1 = none
+    ALT_FRESH_MS=300,     # older than this -> alt -1 (the estimator then falls back to the room camera for height)
     HTTP_PORT=5008,       # GET http://127.0.0.1:5008/imu | /imu/history?n=200 | /status
 )
 
