@@ -8,7 +8,7 @@ the firmware's per-motor percentages and turns the firmware's IMU lines back int
   python -m laptop.control.ble_gondola                    # scan for "BalloonRobot", connect, bridge. Then run teleop / pilot as usual
   python -m laptop.control.ble_gondola --fake --sim       # no hardware: same bridge on the simulated balloon (state on 5007)
   python -m laptop.control.ble_gondola --probe            # connect and print raw IMU lines for 10 s (set config.BLE IMU_FIELDS)
-  python -m laptop.control.ble_gondola --motor C 30       # bench: one motor at 30 % for 2 s, then STOP (which letter is which?)
+  python -m laptop.control.ble_gondola --motor C 30       # bench: one motor at 30 % for 2 s (--secs 10 for a meter), then STOP (which letter is which?)
 
 Firmware command text (write-without-response on COMMAND_UUID): "C 40" / "D -40" / "E 50" / "F 100" (one motor, percent,
 sign = direction), "ALL 30", "MOTORS c d e f" (percent for C D E F), "STOP". Telemetry characteristic notifies one IMU text
@@ -363,7 +363,8 @@ def main():
     ap.add_argument("--no-vision", action="store_true", help="with --fake --sim: no room camera (no balloon / person fixes on 5007): eye + ultrasonic only")
     ap.add_argument("--plot", action="store_true", help="with --fake: live top-down plot of the simulated world (matplotlib)")
     ap.add_argument("--probe", action="store_true", help="print raw IMU lines for 10 s, then the rate verdict, and exit")
-    ap.add_argument("--motor", nargs=2, metavar=("LETTER", "PCT"), help="bench: run one motor for 2 s, then STOP")
+    ap.add_argument("--motor", nargs=2, metavar=("LETTER", "PCT"), help="bench: run one motor for --secs seconds (default 2), then STOP")
+    ap.add_argument("--secs", type=float, default=2.0, help="with --motor: run time in seconds; 10-15 gives time to hold a meter on the driver")
     ap.add_argument("--no-http", action="store_true"); ap.add_argument("--imu-log", action="store_true", help="append samples to data/imu.jsonl")
     args = ap.parse_args()
 
@@ -389,7 +390,8 @@ def main():
         if args.motor:
             letter, pct = args.motor[0].upper(), int(args.motor[1])
             try:
-                print(f"[ble] {letter} {pct} for 2 s"); tr.send(f"{letter} {pct}"); time.sleep(2.0)
+                secs = max(0.2, min(30.0, args.secs))          # capped: the firmware has no timeout of its own yet
+                print(f"[ble] {letter} {pct} for {secs:g} s"); tr.send(f"{letter} {pct}"); time.sleep(secs)
             finally:                                           # Ctrl+C included; and wait for the write: the BLE thread is a daemon,
                 t1 = time.monotonic()                          # leaving at once could exit before STOP is on the air
                 while not tr.send("STOP") and time.monotonic() - t1 < 15: time.sleep(0.2)   # link dropped mid-run (seen on the bench): wait for the reconnect
