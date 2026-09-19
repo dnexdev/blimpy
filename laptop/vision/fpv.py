@@ -45,6 +45,19 @@ def pick_person(people, w, h):
     return max(people, key=key)
 
 
+def count_facing(people, w, h, bearing_max=None, range_max=None):
+    """How many of the detected people are near and centred (the same test the pilot uses for "said to its face").
+    One = somebody is talking to Blimpy's face; several = a group in view, nobody in particular."""
+    O = config.OMNI
+    bearing_max = O["PRESENCE_BEARING_RAD"] if bearing_max is None else bearing_max
+    range_max = O["PRESENCE_RANGE_M"] if range_max is None else range_max
+    n = 0
+    for p in people:
+        o = observe(p["box"], w, h)
+        n += abs(o["bearing"]) < bearing_max and (o["range"] is None or o["range"] < range_max)
+    return n
+
+
 class FpvEye(threading.Thread):
     """Stream + detector on a thread at ~HZ; latest() -> (obs or None, frame ms) and frame() -> the newest frame."""
 
@@ -74,6 +87,7 @@ class FpvEye(threading.Thread):
                 self.last_people = people
                 p = pick_person(people, w, h)
                 self.obs = observe(p["box"], w, h, conf=p.get("conf", 1.0)) if p else None
+                if self.obs: self.obs["people"] = len(people); self.obs["facing"] = count_facing(people, w, h)
                 self.t_obs = t_ms; self.n += 1; self.n_seen += 1 if p else 0
                 if self.out is not None:
                     self.out.send({"t": t_ms, "balloon": None, "person": None, "fpv": self.obs, "src": "fpv"}, ("127.0.0.1", STATE_PORT))

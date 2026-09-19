@@ -74,10 +74,17 @@ def addressed(text, engaged=False, asked=False, presence=False, ptt=False, loud=
     return _verdict(_adr.Addressee(dict(params or {}, names=words)), ctx, ptt, policy, judge)
 
 
-def session_prompt_hash(ctx, names):
+def session_prompt_hash(ctx, names, pictures=0):
     """What the judge was asked, as a hash: a recorded verdict can be reused in a backtest while the question is the same."""
     from .session_rec import prompt_hash
-    return prompt_hash(_adr.judge_prompt(ctx, names))
+    return prompt_hash(_adr.judge_prompt(ctx, names, pictures))
+
+
+def pick_frames(frames, n):
+    """n pictures spread over the turn (the middle and the end for 2): what Blimpy saw while it was said."""
+    if n <= 0 or not frames: return []
+    if len(frames) <= n: return list(frames)
+    return [frames[round((i + 1) * (len(frames) - 1) / n)] for i in range(n)]
 
 
 def _hard(A, ctx, ptt, policy):
@@ -664,13 +671,16 @@ class OmniLive:
     def _new_turn(self):
         now = time.monotonic(); ng = self.name_gate; loud = self.loud
         if self.gate and ng and ng["gate_db_loud"] is not None: self.gate.open_db = ng["gate_db_loud"] if loud else self._gate_db
-        try: presence = bool(self.presence_fn()) if self.presence_fn else None
-        except Exception: presence = None
+        try: seen = self.presence_fn() if self.presence_fn else None           # bool, or how many people are near and centred
+        except Exception: seen = None
+        presence = None if seen is None else bool(seen)
+        people = int(seen) if isinstance(seen, int) and not isinstance(seen, bool) else None
         talking = self._resp_active and self._resp_played                  # talking over Blimpy is talking to Blimpy
         since = 0.0 if talking else (now - self.t_last_reply if self.t_last_reply > 0 else None)
         self._turn = {"t0": now, "verdict": None if ng else True, "audio": [], "calls": [], "since_reply": since, "asked": self._asked,
                       "presence": presence, "loudness": self.loudness, "timed_out": False, "pending": False, "text": None, "logged": False,
-                      "rec_t0": self.rec.now() if self.rec else None, "ctx": None, "dec": None, "judge": None, "n_calls": 0, "local": False}
+                      "rec_t0": self.rec.now() if self.rec else None, "ctx": None, "dec": None, "judge": None, "n_calls": 0, "local": False,
+                      "people": people, "frames": []}
         return self._turn
 
     def _play(self, pcm):
@@ -686,7 +696,7 @@ class OmniLive:
         def age(t): return turn["t0"] - t if t > 0 else None      # measured here, not at speech_started: the turn before may have been judged after this one began
         n = self.addr.P["history"]
         return _adr.Ctx(text, since_reply_s=turn["since_reply"], since_named_s=age(self._t_named), since_summon_s=age(self._t_summon),
-                        asked=turn["asked"], presence=turn["presence"], loudness=turn["loudness"],
+                        asked=turn["asked"], presence=turn["presence"], people=turn["people"], loudness=turn["loudness"],
                         history=tuple((w, t) for w, t in self.transcript[-n:] if w in ("you", "blimpy")))
 
     def _judge(self, turn, text, force=None):
@@ -715,13 +725,14 @@ class OmniLive:
 
     def _ask_judge(self, turn, ctx, dec):
         t0 = time.monotonic(); box = []
-        th = threading.Thread(target=lambda: box.append(self.judge.ask(ctx)), daemon=True); th.start()
+        frames = pick_frames(turn["frames"], self.addr.P["judge_frames"]) if getattr(self.judge, "wants_frames", False) else []
+        th = threading.Thread(target=lambda: box.append(self.judge.ask(ctx, frames) if frames else self.judge.ask(ctx)), daemon=True); th.start()
         th.join(self.addr.P["judge_timeout_s"])                # a slow judge never blocks the turn: the midpoint decides
         p, jwhy = box[0] if box else (None, "timeout")
         self.stats["judged"] = self.stats.get("judged", 0) + 1
         if p is None: self.stats["judge_failed"] = self.stats.get("judge_failed", 0) + 1; self.last_error = f"judge: {jwhy}"
         elif (self.last_error or "").startswith("judge:"): self.last_error = None
-        turn["judge"] = {"p": p, "why": jwhy, "s": round(time.monotonic() - t0, 2), "hash": session_prompt_hash(ctx, self.addr.P["names"])}
+        turn["judge"] = {"p": p, "why": jwhy, "s": round(time.monotonic() - t0, 2), "hash": session_prompt_hash(ctx, self.addr.P["names"], len(frames)), "pictures": len(frames)}
         dec = self.addr.resolve(ctx, dec, p, jwhy)
         if self.debug: print(f"\n[omni] judge {time.monotonic() - t0:.2f} s: p={p} score {dec.score:.2f} {dec.parts}")
         with self._tlock: turn["pending"] = False
@@ -787,7 +798,8 @@ class OmniLive:
             ctx = dataclasses.replace(turn["ctx"] or self._ctx(turn, txt), text=txt); dec = turn["dec"]
             self.rec.turn(ctx, {"t0": turn["rec_t0"], "t1": round(self.rec.now(), 2), "verdict": ok, "why": self.last_verdict,
                                 "score": round(dec.score, 3) if dec else None, "parts": {k: round(v, 3) for k, (v, _) in dec.parts.items()} if dec else None,
-                                "judge": turn["judge"], "policy": self.name_gate["policy"] if self.name_gate else "open"})
+                                "judge": turn["judge"], "policy": self.name_gate["policy"] if self.name_gate else "open",
+                                "frames": self.rec.frames(pick_frames(turn["frames"], max(2, self.addr.P["judge_frames"])))})
         if not ok:
             if txt: self.transcript.append(("ignored", txt)); self._log("ignored", f"{txt}   [{self.last_verdict}]")
             return
@@ -860,8 +872,12 @@ class OmniLive:
         # append image before append audio"; a commit opens a fresh buffer), so frames wait for the next mic packet.
         # With a gate, frames only go while someone is talking: that is the only moment the model looks at them.
         if frame is None or not self.ok or self._audio_since_commit == 0 or (self.gate and not self.gate.open): return False
-        if self.send({"type": "input_image_buffer.append", "image": encode_jpeg(frame)}):
-            self.stats["img_out"] += 1; self._t_frame = time.monotonic(); return True
+        jpg = encode_jpeg(frame)
+        if self.send({"type": "input_image_buffer.append", "image": jpg}):
+            self.stats["img_out"] += 1; self._t_frame = time.monotonic()
+            turn = self._turn
+            if turn is not None and turn["verdict"] is None: turn["frames"].append(jpg); del turn["frames"][:-8]    # what Blimpy saw during this turn: for the judge
+            return True
         return False
 
     def _frame_loop(self):

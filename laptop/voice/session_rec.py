@@ -5,6 +5,7 @@
       turns.jsonl   one row per spoken turn: where it is in mic.wav, the transcript, the context the addressee module saw
                     (addressee.Ctx), the cue scores, what the judge said (and the hash of the prompt it was asked), the
                     verdict, Blimpy's reply, and "label": null until a human says who the turn was for
+      frames/       up to two pictures per turn: what Blimpy's camera saw while it was said (what the judge is shown)
       meta.json     model, room mode, addressee parameters
 
 `python tools/addressee_backtest.py` replays the rows through the current code. data/ is gitignored: recordings of a
@@ -37,6 +38,15 @@ class SessionRecorder:
     def turn(self, ctx, row):
         """ctx: addressee.Ctx; row: the rest (t0, t1, verdict, why, score, parts, judge_p, judge_why, judge_hash, reply)."""
         self._write(dict(row, who="user", ctx=dataclasses.asdict(ctx), label=None)); self.turns += 1
+
+    def frames(self, jpgs_b64):
+        """Keep the pictures of a turn (what the judge saw, or would have seen) -> their paths relative to the session."""
+        import base64
+        out = []
+        for i, j in enumerate(jpgs_b64):
+            (self.dir / "frames").mkdir(exist_ok=True)
+            rel = f"frames/{self.turns:03d}_{i}.jpg"; (self.dir / rel).write_bytes(base64.b64decode(j)); out.append(rel)
+        return out
 
     def said(self, text):
         """Blimpy's own words (context when reading a session back; the backtest skips these rows)."""

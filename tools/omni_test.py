@@ -263,6 +263,15 @@ check("judge: a failed or slow judge (p None) falls back to the thresholds' midp
       and not A("yeah recording started", engaged=True, judge=FakeJudge(None))[0])
 AD = addressee.Addressee()
 fade = [AD.resolve(c, AD.decide(c)).ok for c in (addressee.Ctx("now turn around", since_reply_s=t, loudness=l) for t, l in ((3, 0), (20, 0), (3, 1), (6, 1)))]
+C = addressee.Ctx
+one, group = AD.decide(C("turn left", presence=True, people=1)), AD.decide(C("turn left", presence=True, people=3))
+check("several people in front of Blimpy: 'said to its face' is shared out (one person = as before; a group = nobody in particular, not accepted without a judge)",
+      AD.resolve(C("turn left", presence=True, people=1), one).ok and not AD.resolve(C("turn left", presence=True, people=3), group).ok
+      and one.parts["presence"][0] == 3 * group.parts["presence"][0] and AD.decide(C("turn left", presence=True)).score == one.score, f"{one.parts} {group.parts}")
+check("the judge is told how many people are in view and that pictures are attached",
+      "3 people are standing in front" in addressee.judge_prompt(C("turn left", presence=True, people=3), ("blimpy",))
+      and "picture" in addressee.judge_prompt(C("turn left"), ("blimpy",), 2) and "picture" not in addressee.judge_prompt(C("turn left"), ("blimpy",))
+      and omni.pick_frames(list("abcdefg"), 2) == ["d", "g"] and omni.pick_frames(["a"], 2) == ["a"] and omni.pick_frames(list("abc"), 0) == [])
 check("room: the conversation fades, faster on the loud floor (follow-up at 3 s / 20 s quiet, 3 s / 6 s loud)", fade == [True, False, True, False], str(fade))
 check("name_only(): the bare name is a summons, a named command is not", omni.name_only("Hey, Blimpy.") and not omni.name_only("Hey Blimpy, turn left"))
 
@@ -329,7 +338,8 @@ check("the floor: once a turn is for Blimpy the mic stays shut until it has answ
       held == 0 and wait_for(lambda: len(intents) > n_int, 4) and wait_for(lambda: not om3._floor_taken([]), 8) and om3._floor is None, f"{held} packets leaked, floor {om3._floor}")
 # the judge inside the live path: the reply stays held while it thinks (0.3 s here), then plays or is dropped
 class SlowJudge(FakeJudge):
-    def ask(self, ctx): time.sleep(0.3); return super().ask(ctx)
+    wants_frames = True; frames = None
+    def ask(self, ctx, frames=()): time.sleep(0.3); self.frames = list(frames); return super().ask(ctx)
 quiesce(); om3.name_gate["mode"] = "quiet"; om3.t_last_reply = 0.0; om3._t_named = 0.0; seen[0] = False
 om3.judge = SlowJudge(0.9); n_ch = len(spk3.chunks); mock.script.append({"heard": "P. How are you feeling?", "heard_after_ms": 100, "text": "Floaty!", "audio_chunks": 4}); speak3()
 check("judge in the loop: an unclear turn is held while the judge thinks, then its reply plays in full",

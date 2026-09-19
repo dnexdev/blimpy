@@ -111,7 +111,9 @@ def main():
                 """Someone near and centred in Blimpy's eye (the FPV observation the behaviors already hold): in a quiet
                 room a command said to its face needs no name. No eye, or nobody in it = False."""
                 f = beh.fpv if beh.fpv_ok() else None
-                return f is not None and abs(f["bearing"]) < O["PRESENCE_BEARING_RAD"] and (f.get("range") is None or f["range"] < O["PRESENCE_RANGE_M"])
+                if f is None: return 0
+                if "facing" in f: return f["facing"]                 # how many people are near and centred (several = nobody in particular)
+                return int(abs(f["bearing"]) < O["PRESENCE_BEARING_RAD"] and (f.get("range") is None or f["range"] < O["PRESENCE_RANGE_M"]))
             omni = OmniLive(on_intent=omni_intent, frame_fn=frame_fn, fps=O["FPS"], half_duplex=O["HALF_DUPLEX"], purpose="pilot", gate=gate,
                             mic_device=args.mic, spk_device=args.spk, name_gate=name_gate, presence_fn=facing, record=O["RECORD"]).start()   # devices: index or name fragment
             print(f"[pilot] addressing {'%s (%s room): cues + room thresholds + judge %s (voice/addressee.py); a stop word or a p turn always counts; team chatter makes no sound' % (O['ADDRESS'], O['ADDRESS_MODE'], O['JUDGE']) if name_gate else 'off: everything is answered'}")

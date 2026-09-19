@@ -33,9 +33,11 @@ def ctx_of(row):
     return ad.Ctx(**{k: v for k, v in c.items() if k in ad.Ctx.__dataclass_fields__})
 
 
-def replay(row, A, judge):
+def replay(row, A, judge, base=None):
     """-> (ok, why, note). note: '' | 'judge reused' | 'needs judge' | 'asked'."""
+    import base64
     ctx = ctx_of(row)
+    pics = [base / f for f in row.get("frames") or [] if base is not None and (base / f).exists()][:int(A.P["judge_frames"])]
     if row.get("why", "").startswith("press-to-talk"): return True, "press-to-talk", ""
     hard = omni._hard(A, ctx, False, row.get("policy") or "smart")
     if hard: return hard[0], hard[1], ""
@@ -43,11 +45,12 @@ def replay(row, A, judge):
     if dec.ok is not None: return dec.ok, dec.why, ""
     p = why = None; note = "needs judge"
     j = row.get("judge") or {}
-    if judge != "off" and j.get("p") is not None and j.get("hash") == omni.session_prompt_hash(ctx, A.P["names"]):
+    if judge != "off" and j.get("p") is not None and j.get("hash") == omni.session_prompt_hash(ctx, A.P["names"], j.get("pictures", 0)):
         p, why, note = j["p"], j.get("why", ""), "judge reused"
     elif judge not in ("off", "recorded"):
-        p, why = ad.make_judge(judge, names=A.P["names"], timeout=10).ask(ctx); note = "asked"
-        if p is not None: row["judge"] = {"p": p, "why": why, "hash": omni.session_prompt_hash(ctx, A.P["names"])}; row["_fresh"] = True   # kept: the next replay is free
+        J = ad.make_judge(judge, names=A.P["names"], timeout=15); fr = [base64.b64encode(f.read_bytes()).decode() for f in pics] if getattr(J, "wants_frames", False) else []
+        p, why = J.ask(ctx, fr) if fr else J.ask(ctx); note = "asked"
+        if p is not None: row["judge"] = {"p": p, "why": why, "hash": omni.session_prompt_hash(ctx, A.P["names"], len(fr)), "pictures": len(fr)}; row["_fresh"] = True   # kept: the next replay is free
     elif judge == "off": note = ""
     dec = A.resolve(ctx, dec, p, why or "")
     return dec.ok, dec.why, note
@@ -102,7 +105,7 @@ if __name__ == "__main__":
         A = ad.Addressee(dict(P, names=tuple(names)) if names else dict(P, names=omni.NAME_GATE["words"]))
         print(f"\n{f.parent.name if f.name == 'turns.jsonl' else f.name}  ({len(rows)} turns)")
         for r in rows:
-            ok, why, note = replay(r, A, a.judge); n += 1; need += note == "needs judge"
+            ok, why, note = replay(r, A, a.judge, f.parent); n += 1; need += note == "needs judge"
             truth = r.get("label"); day = r.get("verdict")
             if truth is None:
                 unlabelled += 1; tag = "changed" if ok != day else "same"; changed += ok != day

@@ -322,6 +322,18 @@ A hackathon hall will talk to Blimpy all day. In order of payoff:
    replies with a question. No transcript 1.5 s after the first held audio = judged without it. The pilot logs
    `ignored: <sentence> [why]` and its status line shows `QUIET`/`LOUD` and the count. `ADDRESS="name"` is the strict
    rule (name, stop word, `p`), `"open"` answers everything.
+   **Several voices, several people** (one open mic, anyone may talk to it). What one mic and a slow camera can and
+   cannot do, measured rather than hoped: (a) two people talking at the same instant cannot be separated; the name inside
+   the mix still wins, the rest is the judge's reading of the words. (b) WHOSE voice: measured with speaker embeddings on
+   the hacker-bay recordings (`python -m laptop.voice.voiceprint`): the same person turn against turn 0.75-0.84, other
+   people up to 0.90. They overlap, so there is NO voice cue; rerun that tool after a change of microphone before
+   building on it. (c) Who in the picture is speaking needs lip motion at ~25 fps on a close face: not with this eye.
+   What vision does give, and is used: the FPV eye counts the people near and centred (`fpv.count_facing`); "said to its
+   face" is full evidence for ONE person and is shared out over a group (three people in front of it = nobody in
+   particular, the judge decides); and the judge is SHOWN the turn: up to `judge_frames=2` of the pictures Blimpy's
+   camera took while the sentence was said (someone turned toward it vs people facing each other), +0.15 s on the relay,
+   unclear turns only. The pictures are kept in the session (`frames/`), so this too replays for free. Protection against
+   being cut off is the floor (above): once a turn is for Blimpy the mic stays shut until it has answered.
    **Sessions are kept, backtests are free** (`RECORD=True`, `omni --no-record` to opt out): every run writes
    `data/voice_sessions/<stamp>_<purpose>/` (gitignored): `mic.wav` (all the mic heard, 16 kHz), `turns.jsonl` (per turn:
    where it is in the wav, the transcript, the exact context the cues saw, the scores, the judge's verdict + the hash of

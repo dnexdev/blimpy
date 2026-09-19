@@ -30,6 +30,7 @@ DEFAULTS = dict(
                                              # question of meaning, and a verdict costs a few hundred text tokens; only evidence-free chatter is free
     midpoint=(0.525, 0.625),                 # no judge (off, failed, too slow): at or above this the turn is for Blimpy
     summon_s=(8.0, 5.0),                     # "Hey, Blimpy." covers the next turn when it starts within this
+    judge_frames=2,                          # pictures from the turn shown to the judge (relay only; 0 = words only)
     judge_timeout_s=4.0, history=6,          # measured on the relay: 0.7-1.8 s per verdict, a rare 3 s straggler (seen live: it was the one
                                              # turn that mattered). Slower than this = the midpoint decides
     min_evidence=0.02,                       # a cue contributing less than this says nothing (a conversation that faded a minute ago)
@@ -45,6 +46,7 @@ class Ctx:
     since_summon_s: float | None = None      # ... after a bare "Hey, Blimpy."
     asked: bool = False                      # Blimpy's last words were a question and this is the first turn since
     presence: bool | None = None             # someone near and centred in Blimpy's eye
+    people: int | None = None                # how many are near and centred (None = not known)
     loudness: float = 0.0                    # 0 quiet room .. 1 loud room
     history: tuple = ()                      # ((who, text), ...) oldest first
 
@@ -171,7 +173,8 @@ class PresenceCue(Cue):
     key = "presence"
     def evidence(self, ctx, P):
         if not ctx.presence or not directed(ctx.text) or ctx.loudness >= 1.0: return None
-        return 1.0 - ctx.loudness, "said to its face"
+        n = max(1, ctx.people or 1)             # a group in front of it: the evidence is shared out, nobody in particular is "its face"
+        return (1.0 - ctx.loudness) / n, "said to its face" if n == 1 else f"said in front of it ({n} people)"
 
 
 CUES = (NameCue(), SummonCue(), EngagedCue(), FormCue(), AnswerCue(), PresenceCue())
@@ -231,11 +234,18 @@ other people, and thinking aloud are not. Answer with one JSON object only:
 {{"for_robot": true/false, "confidence": 0.0-1.0, "why": "<= 8 words"}}"""
 
 
-def judge_prompt(ctx, names):
+PICTURES = (" The attached picture(s) are what the robot's camera saw WHILE this was said. Someone turned toward the camera, "
+            "looking or gesturing at it, speaks for the robot; people facing each other, a screen or a phone speak against.")
+
+
+def judge_prompt(ctx, names, pictures=0):
     facts = []
     if ctx.since_reply_s is not None: facts.append(f"The robot last spoke {ctx.since_reply_s:.0f} s before this." if ctx.since_reply_s > 0 else "The speaker talked over the robot.")
     if ctx.asked: facts.append("The robot's last words were a question.")
-    if ctx.presence is not None: facts.append("Someone is standing right in front of the robot." if ctx.presence else "Nobody is in front of the robot.")
+    if ctx.presence is not None:
+        facts.append("Nobody is in front of the robot." if not ctx.presence else "Someone is standing right in front of the robot."
+                     if (ctx.people or 1) == 1 else f"{ctx.people} people are standing in front of the robot.")
+    if pictures: facts.append(PICTURES.strip())
     hist = "\n".join(f"  {who}: {t}" for who, t in ctx.history) or "  (nothing yet)"
     return JUDGE_PROMPT.format(name=names[0].capitalize(), room="loud, crowded hall" if ctx.loudness >= 0.5 else "quiet room, a few people",
                                facts=" ".join(facts), history=hist, text=ctx.text)
@@ -258,10 +268,15 @@ class RelayJudge:
         self.http = http or os.environ.get("OMNI_HTTP", "https://yibuapi.com/v1")
         self.names, self.timeout, self.ledger = names, timeout, ledger      # ledger: True (the default file) | a path | False
 
-    def ask(self, ctx):
+    wants_frames = True
+
+    def ask(self, ctx, frames=()):
+        """frames: base64 JPEGs from the turn (what Blimpy saw while it was said)."""
         import requests
         from . import usage_log
-        body = {"model": self.model, "temperature": 0.0, "max_tokens": 60, "messages": [{"role": "user", "content": judge_prompt(ctx, self.names)}]}
+        text = judge_prompt(ctx, self.names, len(frames))
+        content = text if not frames else [{"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{f}"}} for f in frames] + [{"type": "text", "text": text}]
+        body = {"model": self.model, "temperature": 0.0, "max_tokens": 60, "messages": [{"role": "user", "content": content}]}
         t0 = time.monotonic(); usage = None; status = None; p = None; why = ""
         try:
             r = requests.post(f"{self.http}/chat/completions", json=body, timeout=self.timeout,

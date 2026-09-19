@@ -35,6 +35,10 @@ o = observe((300, 60, 340, 220), W, H)
 check("person above the axis -> positive elevation", o["elev"] > 0)
 p = pick_person([{"box": (10, 10, 60, 120)}, {"box": (200, 50, 330, 400)}, {"box": (500, 20, 560, 200)}], W, H)
 check("pick_person = the largest box", p["box"] == (200, 50, 330, 400))
+from laptop.vision.fpv import count_facing
+big = {"box": (W / 2 - 80, 0, W / 2 + 80, H)}; side = {"box": (5, 100, 60, 300)}; big2 = {"box": (W / 2 - 60, 20, W / 2 + 100, H)}
+check("count_facing: one person near and centred = 1, a bystander at the edge does not count, a group in front = 2",
+      count_facing([big], W, H) == 1 and count_facing([big, side], W, H) == 1 and count_facing([big, big2], W, H) == 2 and count_facing([], W, H) == 0)
 
 # 2. sim eye vs truth
 w = World(dict(IDEAL, fpv=True, tof=True), person="static", psi0=0.3, person_start=(1.5, 0.0))
