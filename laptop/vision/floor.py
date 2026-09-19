@@ -139,7 +139,9 @@ def pose_from_samples(cam, samples):
     tv = np.median(np.array([s[1].ravel() for s in samples]), axis=0)
     R, _ = cv2.Rodrigues(rv)
     pos = np.array([(-cv2.Rodrigues(s[0])[0].T @ s[1].reshape(3, 1)).ravel() for s in samples])
-    return Camera(cam.name, cam.K, cam.dist, cam.size, R, tv), float(np.linalg.norm(np.ptp(pos, axis=0)))
+    # spread = 10th..90th percentile range of the positions (a couple of shaky frames must not veto a still camera)
+    spread = np.linalg.norm(np.percentile(pos, 90, axis=0) - np.percentile(pos, 10, axis=0)) if len(pos) > 1 else 0.0
+    return Camera(cam.name, cam.K, cam.dist, cam.size, R, tv), float(spread)
 
 
 def auto_extrinsics(cam, stream, tag_size=None, layout=None, seconds=2.0, min_samples=8, max_spread=0.03,
@@ -173,7 +175,7 @@ def auto_extrinsics(cam, stream, tag_size=None, layout=None, seconds=2.0, min_sa
     cam2, spread = pose_from_samples(cam, samples)
     info["spread"] = spread
     if spread > max_spread:
-        info["why"] = f"camera position jumped {spread * 100:.1f} cm during sampling: hold the camera still"
+        info["why"] = f"camera position jumped {spread * 100:.1f} cm during sampling: hold the camera still (laptop lid settling after the keyboard?)"
         return None, info
     if save:
         save_extrinsics(calib_dir, cam.name, cam2.R, cam2.t, tag_size=tag_size, rms=info["reproj"], n_tags=info["n_tags"])
@@ -297,9 +299,16 @@ def load_camera(name, calib_dir, stream, auto_calib, tag_size=None, layout=None,
             f"Chessboard it when there is time: tools/calib/intrinsics.py --name {name}")
     if auto_calib:
         cam0 = Camera.load(name, calib_dir, need_extrinsics=False)
-        cam, info = auto_extrinsics(cam0, stream, tag_size, layout, calib_dir=calib_dir)
-        if cam is not None:
-            log("[auto-calib] " + describe(cam, info))
-            return cam
-        log(f"[auto-calib] {info['why']} -> using the saved extrinsics")
+        for attempt in range(3):                    # the lid shakes for a second after Enter: try again before giving up
+            cam, info = auto_extrinsics(cam0, stream, tag_size, layout, calib_dir=calib_dir)
+            if cam is not None:
+                log("[auto-calib] " + describe(cam, info))
+                return cam
+            log(f"[auto-calib] {info['why']}" + (" -> trying again" if attempt < 2 else ""))
+        ep = os.path.join(calib_dir, f"{name}_extrinsics.npz")
+        if os.path.exists(ep):
+            log("[auto-calib] -> using the saved extrinsics")
+        else:
+            raise SystemExit(f"[auto-calib] could not solve the camera pose from the mat and there is no saved {ep}. "
+                             "Keep the laptop still, all four tags in view and in focus, then run again.")
     return Camera.load(name, calib_dir)

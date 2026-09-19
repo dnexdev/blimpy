@@ -134,7 +134,7 @@ def step(cam, person_det, balloon_det, frame, prev_t, now, stale_ms=STALE_MS, pe
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--a", default=config.SOURCES["A"], help="camera source (see streams.py)")
-    ap.add_argument("--name", default="A", help="calibration name (calib/<name>_*.npz)")
+    ap.add_argument("--name", default=config.CALIB_NAMES["A"], help="calibration name (calib/<name>_*.npz)")
     ap.add_argument("--calib", default=config.CALIB_DIR)
     ap.add_argument("--show", action="store_true")
     ap.add_argument("--stale-ms", type=int, default=STALE_MS)
