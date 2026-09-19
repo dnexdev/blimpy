@@ -174,7 +174,8 @@ Write the weight into `PHYS["M_GONDOLA"]` (kg) and `calib/MEASUREMENTS.md`.
 
 ## 5. Build order (bench first, balloon last)
 
-Each step is a go / no-go for the next. Commands run from the repo root on the laptop with Bluetooth on. Section 3 of
+The full procedure, one step at a time with what you should see after each, is `docs/BUILD_STEPS.md` (38 steps).
+This is the summary. Each step is a go / no-go for the next. Commands run from the repo root on the laptop with Bluetooth on. Section 3 of
 the README has the same bench checklist with more detail.
 
 1. **The box talks before anything is built around it.** Power the breadboard. On the laptop:
