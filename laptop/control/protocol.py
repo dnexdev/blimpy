@@ -21,7 +21,7 @@ YR_MAX = 1.0        # rad/s that yr = 1.0 means
 
 
 def resolve(host):
-    """Resolve 'wisp-9910.local' (mDNS) or an IP once, up front. Per-packet lookups would add ~50 ms each."""
+    """Resolve 'blimpy-9910.local' (mDNS) or an IP once, up front. Per-packet lookups would add ~50 ms each."""
     if host.replace(".", "").isdigit():
         return host
     for attempt in range(5):

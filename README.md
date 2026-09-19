@@ -37,7 +37,7 @@ python -m laptop.control.teleop           # second terminal: SPACE arm, w/s a/d 
 ```
 `http://127.0.0.1:5008/imu` (latest IMU sample), `/imu/history?n=200`, `/status` while the bridge runs; the same data in
 Python via `laptop.control.imu_store`. Motor letters, signs and the IMU layout are set once on the bench (section 3).
-Legacy WiFi firmware (`firmware/`, PlatformIO, `cd firmware && pio run`) still works: pass `--esp wisp-xxxx.local`.
+Legacy WiFi firmware (`firmware/`, PlatformIO, `cd firmware && pio run`) still works: pass `--esp blimpy-xxxx.local`.
 
 **Network rule:** phones and Pis join the *laptop's hotspot*, never the hackathon WiFi. The gondola is on Bluetooth.
 
@@ -174,7 +174,8 @@ python tools/omni_report.py --sessions    # the relay's own bill, one row per se
 python tools/omni_report.py --reconcile   # the report, plus the ledger checked against the relay's bill (what was never logged)
 ```
 The key is a per-user environment variable on this laptop (`setx YIBU_API_KEY ...` was run once); every NEW PowerShell
-window has it. The e-mail says it expires 2026-09-20 08:00 EDT, but the relay itself reports access_until
+window has it. On any other machine: `cp .env.example .env`, fill in `YIBU_API_KEY` (and `OMNI_BASE_URL` if the relay
+moves); `.env` is gitignored, read on start by `laptop/__init__.py`, and a variable set in the shell wins over it. The e-mail says it expires 2026-09-20 08:00 EDT, but the relay itself reports access_until
 2026-09-20 02:51 EDT (`GET /v1/dashboard/billing/subscription`): plan for the EARLIER one.
 
 **What the relay bills, and the mic gate.** Read back from the relay's own per-call log on 2026-09-19 (`--sessions`):
@@ -260,7 +261,7 @@ python -m laptop.control.pilot --no-voice              # FOLLOW uses the eye for
 1. Ultrasonic: hardware team adds `alt=<cm>` to the IMU line, pointing down. `python -m laptop.control.ble_gondola --probe`
    must show `alt=` changing as you lift the gondola; `curl http://127.0.0.1:5008/status` shows `alt` in metres.
    Set `config.BLE ALT_UNITS` to what they print. Measure sensor-to-balloon-centre -> `config.PHYS TOF_BELOW`.
-2. Eye stream: flash the ESP32-CAM CameraWebServer sketch with the laptop hotspot's SSID/password (`wisp` / see
+2. Eye stream: flash the ESP32-CAM CameraWebServer sketch with the laptop hotspot's SSID/password (`blimpy` / see
    `firmware/`), 640x480, find its IP (`python tools/find_phone.py`), open `http://<ip>:81/stream` in a browser.
    Then `python -m laptop.vision.fpv --source http://<ip>:81/stream --show`: green box on you, bearing sign flips as
    you step left/right, range roughly right at 1.5 m and 3 m (else adjust `config.FPV HFOV_DEG` / `PERSON_H`).
@@ -296,23 +297,42 @@ A hackathon hall will talk to Blimpy all day. In order of payoff:
 2. **Level gate** in `feed_audio`: DONE (`MicGate`, section 1d; it is also what keeps the bill down). Only packets above
    the room's noise floor + `GATE_DB` go up, so background talkers at hall level never reach the cloud; tune with
    `python -m laptop.voice.omni --meter`.
-3. **Who is that for** (`omni.addressed`, `config.OMNI ADDRESS="smart"`): DONE. Not a wake phrase. The server transcribes
-   every turn and the turn is for Blimpy when (1) its name is ANYWHERE in the sentence ("turn left, Blimpy"), or it is a
-   stop word or a press-to-talk turn; (2) it is a follow-up: the person started talking within 8 s (5 s in a loud room) of
-   Blimpy's last words to an addressed turn AND the sentence is directed (an imperative from Blimpy's vocabulary, "can
-   you ...", a question to "you") or answers a question Blimpy just asked; (3) quiet room only: a directed sentence
-   while someone is near and centred in the balloon's eye (the FPV observation), a command said to its face.
-   "Yeah, recording started" is none of these, inside the window or not. Two more layers: the reply audio and the tool
-   calls of a turn are HELD until its transcript has been judged (on the relay the transcript arrives after the reply
+3. **Who is that for** (`laptop/voice/addressee.py`, `config.OMNI ADDRESS="smart"`): DONE. Not a wake phrase, not a
+   list of special cases. Three replaceable layers. **Cues**: small independent observers, each giving evidence 0..1
+   with a reason: how close any word SOUNDS to the name (spelling + a sound key: "Blimby" is the name, "bumpy" half of
+   it), a bare "Hey, Blimpy." just before (the server's VAD cuts at the pause, so the sentence arrives as the next
+   turn), how fresh the conversation with Blimpy is (fades exponentially, faster in a loud room; a named turn opens it,
+   reply or no reply), an answer to a question Blimpy asked (one turn, and a question back is no answer), someone near
+   and centred in the FPV eye, the form of the sentence. A new signal is one more `Cue` class. **Room**: the weighted
+   sum is compared with two thresholds that slide with the noise floor: above `accept` it is for Blimpy, below
+   `reject` it is not; a loud room raises the bar, shortens the memory and stops trusting the eye. **Judge**: only what
+   falls between the thresholds is a question of meaning, and a language model answers it with the recent conversation
+   in front of it (`JUDGE="relay"`: qwen3.5-omni-flash, 1.0-1.8 s measured, logged as `addressee_judge`; `"ollama"`:
+   local; `"off"`: the midpoint decides). Checked live on the first run's sentences: "P. How are you feeling?" (the
+   name clipped by the transcriber) yes; "wait, where's the other?", "yeah recording started", "oh, found it", "Peter,
+   can you pass that", and a judge asking the team "how do you localize it?" on the loud floor: no. Clear cases (the
+   name, cold chatter, a cold command on the floor) never reach the judge: no cost, no delay. Stop words and
+   press-to-talk bypass everything. `python -m laptop.voice.addressee "<sentence>" --since-reply 2 --judge relay`
+   shows the cues, the score and the verdict for any sentence; every number is in `addressee.DEFAULTS`
+   (`config.OMNI ADDRESSEE` overrides). Under it: the reply audio and the tool
+   calls of a turn are HELD until the turn is judged (on the relay the transcript arrives after the reply
    has begun: the old gate let the first words out and, worse, that reply re-opened the follow-up window so the turn
-   approved itself), so a turn that is not for Blimpy makes no sound and runs nothing; and the model has a
-   `stay_silent` tool it is told to call instead of saying "mm-hm" (its "no" is final, its "yes" still needs the
-   rules). No transcript 1.5 s after the first held audio = judged without it. The pilot logs `ignored: <sentence>
-   [why]` and its status line shows `QUIET`/`LOUD` and the count. `ADDRESS="name"` is the strict old rule without the
-   window, `"open"` answers everything.
+   approved itself), so a turn that is not for Blimpy makes no sound and runs nothing; the model has a
+   `stay_silent` tool it is told to call instead of saying "mm-hm" (its "no" is final), and its prompt forbids closing
+   replies with a question. No transcript 1.5 s after the first held audio = judged without it. The pilot logs
+   `ignored: <sentence> [why]` and its status line shows `QUIET`/`LOUD` and the count. `ADDRESS="name"` is the strict
+   rule (name, stop word, `p`), `"open"` answers everything.
+   **Sessions are kept, backtests are free** (`RECORD=True`, `omni --no-record` to opt out): every run writes
+   `data/voice_sessions/<stamp>_<purpose>/` (gitignored): `mic.wav` (all the mic heard, 16 kHz), `turns.jsonl` (per turn:
+   where it is in the wav, the transcript, the exact context the cues saw, the scores, the judge's verdict + the hash of
+   the question it was asked, the verdict). `python tools/addressee_backtest.py --label <dir> --play` = say who each turn
+   was for; `python tools/addressee_backtest.py` replays every session and `tools/fixtures/addressee_cases.jsonl` (the
+   sentences that went wrong live, labelled) through the current code with NO key: recorded judge verdicts are reused
+   while the question is unchanged. `--set accept=0.7,0.8` tries parameters, `--judge off` shows life without a judge,
+   exit code 1 = a labelled turn is judged wrong. Change the rules, run the backtest, only then spend credits.
    **Rooms**: `ADDRESS_MODE="auto"` reads the mic gate's noise floor (above -45 dBFS = loud, 3 dB hysteresis); `l` in the
    pilot pins quiet / loud. Judging room = quiet: talk to it normally, name once, then follow-ups. The floor = loud:
-   name or a quick directed follow-up, close-talk mic, `GATE_DB_LOUD` from `--calibrate`, and `m` + `p` as the fallback.
+   name or a quick follow-up (the judge settles those), close-talk mic, `GATE_DB_LOUD` from `--calibrate`, and `m` + `p` as the fallback.
    `python -m laptop.voice.omni --debug` prints how long after `speech_stopped` each transcript came and how many
    reply packets were held: check it once with the key (the hold costs that much latency on addressed turns).
 4. **Press-to-talk**: DONE (`p` in the pilot: the mic goes up in full for ONE command, past the gate and past mute, until
@@ -440,7 +460,7 @@ rpicam-vid -t 0 --width 1280 --height 720 --framerate 30 --codec h264 --inline -
 4. Failsafe: Ctrl+C teleop -> the bridge sends `STOP` within 0.5 s and every motor stops. Then kill the BRIDGE while the
    motors run: if they keep spinning, the firmware has no command timeout yet. Ask the hardware team for one (STOP after
    500 ms without a command); until then keep the gondola tethered and a `STOP` ready.
-5. Legacy WiFi board instead? Flash `firmware/` (`cd firmware && pio run -t upload`) and pass `--esp wisp-xxxx.local`
+5. Legacy WiFi board instead? Flash `firmware/` (`cd firmware && pio run -t upload`) and pass `--esp blimpy-xxxx.local`
    to teleop / follow_me / pilot; the pin table is PROTOCOL.md section 9.
 6. Only now attach to the balloon. Trim ballast ~1 gf HEAVY (sinks very slowly with motors off; see PROTOCOL.md section 6).
 

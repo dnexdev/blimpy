@@ -17,7 +17,7 @@ Keys: SPACE arm/disarm     v  push-to-talk (press to start, press again to stop;
       p  press-to-talk for the cloud: the mic goes up in full for ONE command, past the gate and past mute, until you
          stop talking (or 10 s). Stage mode in a loud hall: press m once, then p before each command.
       l  room: auto -> quiet -> loud. Quiet (judging room): a command said to Blimpy's face needs no name. Loud (the
-         floor): the name, or a directed follow-up within 5 s of its last words. auto decides from the mic's noise floor.
+         floor): the name, or a quick follow-up (the conversation fades faster there). auto decides from the mic's noise floor.
 --mic picks the input device (any earbuds with a mic beat the laptop's: list them with  python -m sounddevice), --spk the
 output (AirPods as the mic, laptop speakers for the voice:  --mic AirPods --spk Speakers). Keep HALF_DUPLEX on: the
 earbud mic still hears the laptop speakers.
@@ -103,7 +103,7 @@ def main():
         gate = dict(open_db=O["GATE_DB"], min_dbfs=O["GATE_MIN_DBFS"], preroll_ms=O["GATE_PREROLL_MS"], hangover_ms=O["GATE_HANGOVER_MS"],
                     warmup_s=O["GATE_LISTEN_S"], on_ready=lambda g: print(f"\n[pilot] {g.verdict()}")) if O["GATE"] else False
         try:
-            name_gate = dict(words=tuple(w.lower() for w in O["NAME_WORDS"]), followup_s=O["NAME_FOLLOWUP_S"], followup_loud_s=O["FOLLOWUP_LOUD_S"],
+            name_gate = dict(words=tuple(w.lower() for w in O["NAME_WORDS"]), judge=O["JUDGE"], params=O["ADDRESSEE"],
                              policy=O["ADDRESS"], mode=O["ADDRESS_MODE"], loud_floor_db=O["LOUD_FLOOR_DB"], gate_db_loud=O["GATE_DB_LOUD"],
                              verdict_timeout_s=O["VERDICT_TIMEOUT_S"]) if O["NAME_GATE"] else False
 
@@ -113,8 +113,8 @@ def main():
                 f = beh.fpv if beh.fpv_ok() else None
                 return f is not None and abs(f["bearing"]) < O["PRESENCE_BEARING_RAD"] and (f.get("range") is None or f["range"] < O["PRESENCE_RANGE_M"])
             omni = OmniLive(on_intent=omni_intent, frame_fn=frame_fn, fps=O["FPS"], half_duplex=O["HALF_DUPLEX"], purpose="pilot", gate=gate,
-                            mic_device=args.mic, spk_device=args.spk, name_gate=name_gate, presence_fn=facing).start()   # devices: index or name fragment
-            print(f"[pilot] addressing {'%s (%s room): the name anywhere, a directed follow-up, a stop word or a p turn counts; team chatter makes no sound' % (O['ADDRESS'], O['ADDRESS_MODE']) if name_gate else 'off: everything is answered'}")
+                            mic_device=args.mic, spk_device=args.spk, name_gate=name_gate, presence_fn=facing, record=O["RECORD"]).start()   # devices: index or name fragment
+            print(f"[pilot] addressing {'%s (%s room): cues + room thresholds + judge %s (voice/addressee.py); a stop word or a p turn always counts; team chatter makes no sound' % (O['ADDRESS'], O['ADDRESS_MODE'], O['JUDGE']) if name_gate else 'off: everything is answered'}")
             if args.mic is not None or args.spk is not None:
                 import sounddevice as sd
                 print(f"[pilot] cloud mic: {sd.query_devices(omni.mic_device, 'input')['name'][:50]}   voice out: {sd.query_devices(omni.spk_device, 'output')['name'][:50]}")

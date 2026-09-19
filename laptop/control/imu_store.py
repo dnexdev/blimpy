@@ -29,6 +29,9 @@ _t_first = None
 _log = None
 
 _KV = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*[:=]\s*(-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)")
+# "A:-0.161,-0.009,1.077;G:-2.09,2.02,-0.35;T:44.5" (the gondola firmware, seen on the bench): a key with a LIST of numbers
+_VEC = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*[:=]\s*(-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?(?:\s*,\s*-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)+)")
+VEC_NAMES = {"a": "a", "acc": "a", "accel": "a", "g": "g", "gyr": "g", "gyro": "g", "m": "m", "mag": "m"}   # A:x,y,z -> ax ay az
 _NUM = re.compile(r"-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?")
 BY_COUNT = {3: ("yaw", "pitch", "roll"), 6: ("ax", "ay", "az", "gx", "gy", "gz"),
             7: ("t_ms", "ax", "ay", "az", "gx", "gy", "gz"), 9: ("ax", "ay", "az", "gx", "gy", "gz", "mx", "my", "mz"),
@@ -54,9 +57,13 @@ def parse(line, fields=None, units="deg"):
         except (ValueError, AttributeError):
             d = {}
     if not d:
-        kv = _KV.findall(s)
-        if kv:
-            d = {k: float(v) for k, v in kv}
+        for key, vals in _VEC.findall(s):                 # vectors first, then whatever scalars are left (T:44.5)
+            pre = VEC_NAMES.get(key.lower(), key)
+            for ax, v in zip("xyzw", vals.split(",")): d[pre + ax] = float(v)
+        kv = _KV.findall(_VEC.sub(" ", s)) if d else _KV.findall(s)
+        if kv or d:
+            d.update({k: float(v) for k, v in kv})
+            if "T" in d and "temp" not in d: d["temp"] = d["T"]
         else:
             nums = [float(x) for x in _NUM.findall(s)]
             if not nums: return None

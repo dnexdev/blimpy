@@ -37,6 +37,9 @@ p = imu_store.parse
 check("parse key=value", p("IMU: yaw=90 pitch=-1.5 roll=0.2 gz=-57.2958") and abs(p("yaw=90 gz=-57.2958")["gz_rad"] + 1.0) < 1e-3
       and abs(p("yaw=90 gz=-57.2958")["yaw_rad"] - 1.5708) < 1e-3)
 check("parse bare 6 numbers", p("0.01,-0.02,0.98,1.2,-0.4,3.1") == {"ax": 0.01, "ay": -0.02, "az": 0.98, "gx": 1.2, "gy": -0.4, "gz": 3.1, "gz_rad": 3.1 * 3.141592653589793 / 180})
+v = p("A:-0.161,-0.009,1.077;G:-2.09,2.02,-0.35;T:44.5")          # the gondola firmware's line, captured on the bench
+check("parse firmware vectors A:x,y,z;G:x,y,z;T:t", v and (v["ax"], v["ay"], v["az"], v["gx"], v["gy"], v["gz"], v["temp"]) == (-0.161, -0.009, 1.077, -2.09, 2.02, -0.35, 44.5)
+      and abs(v["gz_rad"] + 0.35 * 3.141592653589793 / 180) < 1e-9, str(v))
 check("parse json + rad units", abs(p('{"gz": 2.0, "yaw": 1.0}', units="rad")["gz_rad"] - 2.0) < 1e-9)
 check("parse custom fields", p("1 2 3 4", fields=("a", "b", "gz", "d"))["gz_rad"] > 0)
 check("parse garbage -> None", p("hello") is None and p("") is None)
@@ -114,6 +117,27 @@ check("drives again after reconnect", 25 <= m["C"] <= 35 and 25 <= m["D"] <= 35 
 
 br.stop.set(); time.sleep(0.4)
 check("exit sends STOP", tr.last_cmd == "STOP")
+# gyro zero: the bench log (1 Hz, gz resting at -0.36 deg/s) -> offset learnt while disarmed, heading stops drifting; frozen when armed
+class _NoLink:
+    connected = False; connects = 0; on_line = None
+    def start(self): return self
+    def send(self, text): return False
+    def close(self): pass
+import math, random
+imu_store.reset(); rng = random.Random(1); zb = Bridge.__new__(Bridge)
+zb.log = lambda *a: None; zb.armed = False; zb.gz_bias = 0.0; zb._gz_win = []; zb.yaw = 0.0; zb.gz = 0.0; zb.t_imu = None; zb.pitch = zb.roll = 0.0; zb.alt, zb.t_alt = -1.0, None
+for i in range(8): zb._on_imu(dict(p(f"A:-0.161,-0.009,1.077;G:-2.19,1.97,{-0.36 + rng.uniform(-0.1, 0.1):.2f};T:44.5"), t=100.0 + i))
+y0 = zb.yaw
+for i in range(8, 40): zb._on_imu(dict(p(f"A:-0.161,-0.009,1.077;G:-2.19,1.97,{-0.36 + rng.uniform(-0.1, 0.1):.2f};T:44.5"), t=100.0 + i))
+check("gyro zero: resting offset learnt while disarmed, heading stops drifting", abs(math.degrees(zb.gz_bias) + 0.36) < 0.08 and abs(math.degrees(zb.yaw - y0)) < 0.5,
+      f"offset {math.degrees(zb.gz_bias):+.2f} deg/s, drift after it {math.degrees(zb.yaw - y0):+.2f} deg in 32 s")
+zb.armed = True; b0 = zb.gz_bias
+for i in range(40, 50): zb._on_imu(dict(p("A:0,0,1;G:0,0,3.0;T:44.5"), t=100.0 + i))
+check("gyro zero: frozen while armed (a steady turn is not an offset)", zb.gz_bias == b0 and zb.gz > 0.05, f"gz {math.degrees(zb.gz):+.2f} deg/s")
+zb.armed = False
+for i in range(50, 60): zb._on_imu(dict(p("A:0,0,1;G:0,0,9.0;T:44.5"), t=100.0 + i))
+check("gyro zero: a steady 9 deg/s is rotation, not an offset", zb.gz_bias == b0)
+
 n_fail = sum(not v for v in results.values())
 print(f"\n{len(results) - n_fail}/{len(results)} checks passed")
 sys.exit(1 if n_fail else 0)

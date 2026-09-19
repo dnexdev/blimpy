@@ -23,8 +23,8 @@
 #define CMD_PORT     5005
 #define TELEM_PORT   5006
 #define WIFI_TIMEOUT_MS 40000
-#define AP_SSID      "wisp-gondola"   // fallback access point if the hotspot is not found
-#define AP_PASS      "wispwisp"
+#define AP_SSID      "blimpy-gondola"   // fallback access point if the hotspot is not found
+#define AP_PASS      "blimpyblimpy"
 
 // ---------------- Control (must match laptop/control/protocol.py) ----------------
 #define CAP            0.5f    // max motor duty

@@ -173,7 +173,7 @@ check("gate: a constant loud noise becomes the floor within ~13 s and the gate s
 
 mock.script.append({"tool": {"intent": "hover"}})
 om2 = omni.OmniLive(on_intent=lambda d: (intents.append(d), "holding")[1], frame_fn=lambda: frame,
-                    api_key="test-key-1234", url=f"ws://127.0.0.1:{PORT}/v1/realtime", fps=4.0, gate=True,
+                    api_key="test-key-1234", url=f"ws://127.0.0.1:{PORT}/v1/realtime", fps=4.0, gate=True, name_gate={"judge": "off"},
                     mic=False, speaker=spk, usage_log=ledger, purpose="omni_test", on_text=lambda w, t: None)
 om2.start(timeout=5)
 a0, i0 = mock.stats["audio_appends"], mock.stats["images"]
@@ -199,6 +199,7 @@ om2._ptt_until = 0.0; om2.muted = False; om2._ptt_turn = False
 # 11. the name gate: a turn without "Blimpy" in its transcript is someone else talking -> reply cancelled, command dropped
 def speak():
     """Exactly one mock turn: its VAD starts after 25 appends and stops 10 later; 40 appends leaves no room for a second."""
+    wait_for(lambda: not om2._resp_active and om2._client_creates == 0 and not om2._after_done and not om2._floor_taken([]), 8)   # Blimpy's turn is over
     for _ in range(30): om2.feed_audio(loud); time.sleep(0.02)
     for _ in range(10): om2.feed_audio(quiet); time.sleep(0.02)
     time.sleep(0.3)
@@ -221,6 +222,7 @@ om2.t_last_reply = 0.0; n_int = len(intents); speak()
 check("name gate: a stop word always acts", wait_for(lambda: len(intents) > n_int, 4) and intents[-1] == {"intent": "hover"}, f"{intents[n_int:]}")
 om2.stop()
 
+import tempfile; REC_DIR = tempfile.mkdtemp(prefix="blimpy_rec_")
 # 12. who is that for: the rules, then the real ordering (the reply starts BEFORE the turn's transcript arrives)
 A = omni.addressed
 cases = [("yeah recording started", {}, False), ("yeah recording started", {"engaged": True}, False), ("code started", {"engaged": True, "presence": True}, False),
@@ -232,19 +234,45 @@ cases = [("yeah recording started", {}, False), ("yeah recording started", {"eng
          ("follow me", {"engaged": True, "policy": "name"}, False), ("whatever", {"policy": "open"}, True), (None, {"engaged": True}, False), (None, {"engaged": True, "asked": True}, True)]
 bad = [(t, k, A(t, **k)) for t, k, want in cases if A(t, **k)[0] != want]
 check("addressed(): name anywhere, follow-ups must be directed, team chatter is not for Blimpy", not bad, str(bad))
+# seen live: the name clipped to "P.", Blimpy's own closing question letting chatter in, "Hey, Blimpy." cut from its sentence by the VAD
+live = [("P. the code is running", {}, False), ("Wait, where's the other?", {"engaged": True, "asked": True}, False), ("Oh, found it.", {"engaged": True}, False),
+        ("Do you think universals exist as real and distinct entities?", {"summoned": True}, True), ("Blimby, turn left", {}, True),
+        ("Peter, can you pass that", {}, False), ("it is simply bumpy", {}, False)]
+bad = [(t, k, A(t, **k)) for t, k, want in live if A(t, **k)[0] != want]
+check("addressed(): a misspelt name, a summons covers the next turn, a question back is no answer", not bad, str(bad))
+# the judge: only what falls between the room's thresholds reaches it, and it can move such a turn either way
+from laptop.voice import addressee
+class FakeJudge:
+    def __init__(self, p): self.p, self.asked = p, []
+    def ask(self, ctx): self.asked.append(ctx.text); return self.p, "fake"
+yes, no = FakeJudge(0.9), FakeJudge(0.1)
+check("judge: the clipped name (\"P. How are you feeling?\") is unclear in a quiet room, the judge settles it either way",
+      A("P. How are you feeling?", judge=yes)[0] and not A("P. How are you feeling?", judge=no)[0] and not A("P. How are you feeling?")[0])
+check("judge: any turn with real evidence goes to the judge; clear cases never do (the name, chatter with nothing pointing at Blimpy)",
+      not A("yeah recording started", engaged=True, judge=no)[0] and no.asked[-1] == "yeah recording started"
+      and A("turn left, Blimpy", judge=no)[0] and not A("so anyway", judge=yes)[0] and not A("so anyway", loud=True, judge=yes)[0]
+      and "turn left, Blimpy" not in no.asked and "so anyway" not in yes.asked, f"{no.asked} {yes.asked}")
+check("judge: a failed or slow judge (p None) falls back to the thresholds' midpoint", A("now turn around", engaged=True, judge=FakeJudge(None))[0]
+      and not A("yeah recording started", engaged=True, judge=FakeJudge(None))[0])
+AD = addressee.Addressee()
+fade = [AD.resolve(c, AD.decide(c)).ok for c in (addressee.Ctx("now turn around", since_reply_s=t, loudness=l) for t, l in ((3, 0), (20, 0), (3, 1), (6, 1)))]
+check("room: the conversation fades, faster on the loud floor (follow-up at 3 s / 20 s quiet, 3 s / 6 s loud)", fade == [True, False, True, False], str(fade))
+check("name_only(): the bare name is a summons, a named command is not", omni.name_only("Hey, Blimpy.") and not omni.name_only("Hey Blimpy, turn left"))
 
 spk3 = FakeSpeaker(); seen = [False]
 om3 = omni.OmniLive(on_intent=lambda d: (intents.append(d), "done")[1], api_key="test-key-1234", url=f"ws://127.0.0.1:{PORT}/v1/realtime", gate=False,
                     mic=False, speaker=spk3, usage_log=ledger, purpose="omni_test", on_text=lambda w, t: None, presence_fn=lambda: seen[0],
-                    name_gate={"mode": "quiet"})
+                    name_gate={"mode": "quiet", "judge": "off"}, record=REC_DIR)
 om3.start(timeout=5)
 def speak3():
     """Exactly one mock turn and nothing left over: its VAD starts at 25 appends and stops 10 later."""
+    wait_for(lambda: not om3._floor_taken([]), 8)        # a person waits for Blimpy to finish; so does the mic (the floor)
     for _ in range(25): om3.feed_audio(loud); time.sleep(0.02)
     for _ in range(10): om3.feed_audio(quiet); time.sleep(0.02)
 def quiesce():
     """Let the last turn's replies (the spoken confirmation after a tool call) finish, so they are not counted in the next check."""
     time.sleep(0.4); wait_for(lambda: not om3._resp_active and om3._client_creates == 0 and not om3._after_done, 4); time.sleep(0.2)
+    wait_for(lambda: not om3._floor_taken([]), 6)       # Blimpy's turn is over: the mic is open again
 def ignored_after(script_item, settle=0.8):
     """One turn; True when it was ignored with no sound and no command."""
     spk3.chunks.clear()                                  # (speech_started flushes the speaker anyway: count from zero)
@@ -264,7 +292,7 @@ mock.script.append({"heard": "what do you see, Blimpy", "heard_after_ms": 300, "
 check("late transcript with the name (at the END of the sentence): the held reply plays in full", wait_for(lambda: len(spk3.chunks) == 4 and ("blimpy", "A desk.") in om3.transcript, 4) and om3.t_last_reply > 0, f"{len(spk3.chunks)} chunks, why '{om3.last_verdict}'")
 mock.script.append({"heard": "now turn around", "heard_after_ms": 300, "tool": {"intent": "rotate", "degrees": 180}}); n_int = len(intents); speak3()
 check("follow-up without the name: a directed sentence right after Blimpy's reply runs", wait_for(lambda: len(intents) > n_int, 4)
-      and intents[-1] == {"intent": "rotate", "degrees": 180} and om3.last_verdict == "follow-up", f"{intents[n_int:]} why '{om3.last_verdict}'")
+      and intents[-1] == {"intent": "rotate", "degrees": 180} and "in conversation" in om3.last_verdict, f"{intents[n_int:]} why '{om3.last_verdict}'")
 quiesce(); om3.t_last_reply = time.monotonic()
 check("inside the follow-up window, 'yeah recording started' is still not for Blimpy",
       ignored_after({"heard": "yeah recording started", "heard_after_ms": 200, "text": "Ok, got it!", "audio_chunks": 4}), om3.last_verdict)
@@ -278,12 +306,40 @@ check("the model calls stay_silent: no sound, no response.create, turn closed",
 quiesce(); om3.name_gate["verdict_timeout_s"] = 0.4; om3.t_last_reply = 0.0; om3._asked = False
 check("the transcript never comes: judged without it after the timeout, nothing plays",
       ignored_after({"heard_after_ms": -1, "text": "Sure!", "audio_chunks": 12}, settle=1.0) and "no transcript" in om3.last_verdict, ignored_after.detail)
-quiesce(); om3.t_last_reply = 0.0; seen[0] = True; mock.script.append({"heard": "turn left", "heard_after_ms": 200, "tool": {"intent": "rotate", "degrees": 90}}); n_int = len(intents); speak3()
+quiesce(); om3.t_last_reply = 0.0; om3._t_named = 0.0; seen[0] = True; mock.script.append({"heard": "turn left", "heard_after_ms": 200, "tool": {"intent": "rotate", "degrees": 90}}); n_int = len(intents); speak3()
 check("quiet room: a cold command said to Blimpy's face (someone centred in its eye) runs", wait_for(lambda: len(intents) > n_int, 4)
-      and om3.last_verdict == "said to its face", om3.last_verdict)
-quiesce(); om3.t_last_reply = 0.0
+      and "said to its face" in om3.last_verdict, om3.last_verdict)
+quiesce(); om3.t_last_reply = 0.0; om3._t_named = 0.0
 check("loud room: the same cold command needs the name", om3.cycle_mode() == "loud"
       and ignored_after({"heard": "turn left", "heard_after_ms": 200, "tool": {"intent": "rotate", "degrees": 90}}) and "loud room" in om3.last_verdict, om3.last_verdict)
+# the floor (seen live in a loud hall: a neighbour's next sentence cancelled Blimpy's answer before it began)
+quiesce(); om3.name_gate["mode"] = "quiet"; n_int = len(intents)
+mock.script.append({"heard": "Blimpy, go forward a bit", "heard_after_ms": 100, "tool": {"intent": "follow_me"}}); speak3()
+wait_for(lambda: om3._floor == "blimpy", 3); a0 = mock.stats["audio_appends"]
+for _ in range(30): om3.feed_audio(loud); time.sleep(0.01)             # the neighbour talks straight over the end of the command
+held = mock.stats["audio_appends"] - a0
+check("the floor: once a turn is for Blimpy the mic stays shut until it has answered (nothing can cancel the answer), then reopens",
+      held == 0 and wait_for(lambda: len(intents) > n_int, 4) and wait_for(lambda: not om3._floor_taken([]), 8) and om3._floor is None, f"{held} packets leaked, floor {om3._floor}")
+# the judge inside the live path: the reply stays held while it thinks (0.3 s here), then plays or is dropped
+class SlowJudge(FakeJudge):
+    def ask(self, ctx): time.sleep(0.3); return super().ask(ctx)
+quiesce(); om3.name_gate["mode"] = "quiet"; om3.t_last_reply = 0.0; om3._t_named = 0.0; seen[0] = False
+om3.judge = SlowJudge(0.9); n_ch = len(spk3.chunks); mock.script.append({"heard": "P. How are you feeling?", "heard_after_ms": 100, "text": "Floaty!", "audio_chunks": 4}); speak3()
+check("judge in the loop: an unclear turn is held while the judge thinks, then its reply plays in full",
+      wait_for(lambda: ("blimpy", "Floaty!") in om3.transcript, 4) and om3.judge.asked == ["P. How are you feeling?"] and "judge" in om3.last_verdict, f"{om3.last_verdict} asked {om3.judge.asked} tail {om3.transcript[-3:]}")
+quiesce(); om3.judge = SlowJudge(0.1)
+check("judge in the loop: chatter right after Blimpy spoke goes to the judge and makes no sound",
+      ignored_after({"heard": "yeah recording started", "heard_after_ms": 100, "text": "Ok, got it!", "audio_chunks": 4}) and om3.judge.asked == ["yeah recording started"], ignored_after.detail)
+om3.judge = None
+# the session is kept for the backtests: the mic audio, one row per turn with the context, and the backtest agrees with the day
+import subprocess, wave as _wave
+rec_dir = om3.rec.dir; om3.rec.close(); rows = [json.loads(l) for l in (rec_dir / "turns.jsonl").read_text().splitlines()]
+users = [r for r in rows if r["who"] == "user"]
+with _wave.open(str(rec_dir / "mic.wav")) as w: secs = w.getnframes() / w.getframerate()
+bt = subprocess.run([sys.executable, "tools/addressee_backtest.py", str(rec_dir)], capture_output=True, text=True)
+check("session recorder: mic.wav + a row per turn (context, cue scores, the judge's verdict and prompt hash); the backtest replays it unchanged",
+      secs > 5 and len(users) >= 8 and any(r.get("judge") and r["judge"].get("hash") for r in users) and any(r["who"] == "blimpy" for r in rows)
+      and "(0 differ from the day)" in bt.stdout, f"{secs:.0f} s, {len(users)} turns; {bt.stdout.strip().splitlines()[-1] if bt.stdout else bt.stderr[-200:]}")
 g3 = omni.MicGate(warmup_s=0.0); om3.gate = g3; om3.name_gate["mode"] = "auto"
 g3.ready = True; g3.floor = -30.0; l1 = om3.loud; g3.floor = -44.0; l2 = om3.loud; g3.floor = -60.0; l3 = om3.loud
 check("auto mode follows the gate's noise floor with hysteresis", (l1, l2, l3) == (True, True, False), str((l1, l2, l3)))

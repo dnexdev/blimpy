@@ -141,7 +141,7 @@ The ESP32-C3 has only 6 PWM channels, which is why it is PWM+DIR and not two PWM
 - Legacy WiFi build: ESP32 status LED (shares GPIO 8 with nSLEEP, active low): **off = armed**, slow blink (1 Hz) = idle & talking
   to the laptop, fast blink (4 Hz) = no commands for 2 s / no WiFi.
 - Legacy WiFi build: hotspot lost after boot: the ESP32 retries every 5 s and restarts mDNS when back. If the hotspot was never found
-  at boot it stays on the fallback AP `wisp-gondola` (192.168.4.1) until power-cycled.
+  at boot it stays on the fallback AP `blimpy-gondola` (192.168.4.1) until power-cycled.
 
 ## 9. Legacy WiFi build: ESP32-C3 SuperMini pin map (the Bluetooth gondola's wiring is the hardware team's)
 

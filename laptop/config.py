@@ -33,17 +33,18 @@ OMNI = dict(
     GATE_PREROLL_MS=320,     # audio kept from just before the gate opened (the first syllable)
     GATE_HANGOVER_MS=1000,   # audio kept after the last loud packet; must stay > the server VAD's 600 ms of silence
     GATE_LISTEN_S=5.0,       # on startup the gate listens to the room this long (nothing goes up), sets the floor, prints a verdict
-    # Who is that for (omni.addressed): a turn is for Blimpy when its name is anywhere in the sentence, or it is a directed
-    # follow-up right after Blimpy spoke, or (quiet room) a command said to its face; stop words (safety) and press-to-talk
-    # always count. The reply and the tool calls of a turn are held until its transcript is judged, so team chatter makes
-    # no sound and runs nothing. The audio still goes up (it is what gets transcribed). False = answer everything.
+    # Who is that for (laptop/voice/addressee.py): independent cues (how close a word sounds to the name, how fresh the
+    # conversation with Blimpy is, an answer to its question, someone in front of its eye, the form of the sentence) are
+    # weighed against two thresholds that slide with the room's noise; what falls between them goes to a language-model
+    # judge. Stop words (safety) and press-to-talk always count. The reply and the tool calls of a turn are held until it
+    # is judged, so team chatter makes no sound and runs nothing. False = answer everything.
     NAME_GATE=True,
     NAME_WORDS=("blimpy", "blimpie", "blippi", "limpie", "blimp", "limpy", "blimpey"),
-    NAME_FOLLOWUP_S=8.0,     # quiet room: a follow-up that starts this long after Blimpy's last words needs no name, IF it is
-                             # directed (a command, a request, a question to "you") or answers a question Blimpy asked
-    FOLLOWUP_LOUD_S=5.0,     # the same window in a loud room
-    ADDRESS="smart",         # who is that for (omni.addressed): smart = name anywhere / directed follow-up / said to its face in a
-                             # quiet room | name = the name, a stop word or p only | open = answer everything
+    ADDRESS="smart",         # smart = cues + room + judge | name = the name, a stop word or p only | open = answer everything
+    JUDGE="relay",           # settles the unclear turns: relay (sponsored text model, ~1-2 s, logged as addressee_judge) |
+                             # ollama (local, no key) | off (the midpoint of the thresholds decides)
+    RECORD=True,             # keep each session (mic.wav + turns.jsonl, data/voice_sessions, gitignored) for tools/addressee_backtest.py
+    ADDRESSEE=dict(),        # overrides of addressee.DEFAULTS, e.g. dict(engaged_tau_s=(10, 5), weights=dict(presence=0.4), accept=(0.8, 0.85))
     ADDRESS_MODE="auto",     # auto = loud when the mic gate's noise floor is above LOUD_FLOOR_DB | quiet | loud   (pilot key l)
     LOUD_FLOOR_DB=-45.0,
     GATE_DB_LOUD=None,       # GATE_DB while the room is loud; None = unchanged. Take it from `omni --calibrate` on the floor.
@@ -72,7 +73,7 @@ FPV = dict(
 # --- Network ---
 ESP32_IP = "127.0.0.1"            # where the control programs send commands. The gondola is on Bluetooth: run
                                   # `python -m laptop.control.ble_gondola` on this laptop and everything talks to it here.
-                                  # (Legacy WiFi firmware boards answer on "wisp-9910.local" / "wisp-91c8.local".)
+                                  # (Legacy WiFi firmware boards answer on "blimpy-9910.local" / "blimpy-91c8.local".)
 
 # --- Gondola over Bluetooth LE (laptop/control/ble_gondola.py). The firmware takes per-motor PERCENTAGES as text. ---
 BLE = dict(
@@ -85,6 +86,8 @@ BLE = dict(
     HZ=20,                # MOTORS lines per second at most (BLE write-without-response)
     IMU_FIELDS=None,      # names for a bare-numbers IMU line, e.g. ("ax","ay","az","gx","gy","gz"); None = by count / key=value
     GYRO_UNITS="deg",     # "deg" (deg/s and degrees, most Arduino IMU libraries) or "rad"
+    GYRO_ZERO=True, GYRO_ZERO_S=3.0, GYRO_STILL_DPS=0.6, GYRO_BIAS_MAX_DPS=5.0,   # gyro zero learnt while disarmed and still (bridge._zero_gyro):
+                          # hold the gondola still ~3 s before arming. Bench 2026-09-19: gz rests at -0.36 deg/s, noise 0.06.
     GYRO_SIGN=1,          # -1 if turning the gondola counter-clockwise (seen from above) gives a NEGATIVE gz
     IMU_FRESH_MS=200,     # yaw-rate feedback in the mixer only with a sample younger than this
     ALT_KEYS=("alt", "range", "dist", "sonar", "us"),   # the ultrasonic (downward) in the same IMU line, first key found wins

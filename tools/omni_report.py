@@ -102,8 +102,8 @@ calls without usage from upstream: {t['usage_missing_calls']}.
 
 How the calls were logged: every call from our application goes through your yibu_audit.append_audit_record
 (unmodified copy in our repo). Realtime sessions are logged one record per response (each response.done with its
-usage), plus one failed record per connection attempt that did not reach a session. Focus-watch HTTP calls are one
-record each. Purposes in the ledger: {purposes}. Gaps: a response cancelled by barge-in comes back from the server
+usage), plus one failed record per connection attempt that did not reach a session. HTTP calls (the focus watcher, the
+addressee judge that decides whether a sentence was meant for the robot) are one record each. Purposes in the ledger: {purposes}. Gaps: a response cancelled by barge-in comes back from the server
 without usage and is logged with usage null (counted under usage_missing_calls, not as zero); a session closed by a
 network drop before response.done has no usage row for that response.
 {gap}No prompts, audio, images or the key are in the ledger or the attachments.

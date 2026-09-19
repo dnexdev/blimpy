@@ -126,9 +126,9 @@ static void readTof() {
 }
 
 // ------------------------------------------------------------------ network
-static String hostName() {                    // "wisp-" + last 2 MAC bytes, e.g. wisp-9910 -> reachable as wisp-9910.local
+static String hostName() {                    // "blimpy-" + last 2 MAC bytes, e.g. blimpy-9910 -> reachable as blimpy-9910.local
   uint8_t mac[6]; WiFi.macAddress(mac);
-  char b[16]; snprintf(b, sizeof(b), "wisp-%02x%02x", mac[4], mac[5]);
+  char b[16]; snprintf(b, sizeof(b), "blimpy-%02x%02x", mac[4], mac[5]);
   return String(b);
 }
 

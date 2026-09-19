@@ -193,6 +193,7 @@ class Bridge:
         self.cur, self.mix_state, self.armed = (0.0, 0.0, 0.0, 0.0), {"yawI": 0.0}, False
         self.yaw, self.gz, self.t_imu = 0.0, 0.0, None       # heading integrated from the IMU (or its own yaw field)
         self.pitch = self.roll = 0.0
+        self.gz_bias, self._gz_win = 0.0, []                  # gyro zero (raw rad/s): learnt while disarmed and still, see _zero_gyro
         self.alt, self.t_alt = -1.0, None                         # downward ultrasonic in the IMU line (config.BLE ALT_KEYS), m
         self.last_pct, self.last_line, self.t_sent = None, None, -1e9
         self.telem_hz = telem_hz; self.n_tel = 0; self.age_ms = -1
@@ -206,9 +207,25 @@ class Bridge:
     def _on_line(self, data):
         imu_store.push(data, fields=B["IMU_FIELDS"], units=B["GYRO_UNITS"])
 
+    def _zero_gyro(self, t, gz_raw):
+        """A MEMS gyro at rest does not read zero (bench: gz -0.36 deg/s, gx -2.2, steady to 0.06): integrated, that is 20
+        degrees of heading a minute. While DISARMED, when the last GYRO_ZERO_S of gz stayed within GYRO_STILL_DPS and its
+        mean is a plausible offset (< GYRO_BIAS_MAX_DPS), that mean is the zero. So: hold the gondola still a few seconds
+        before arming. Armed = frozen (a steady turn must not be learnt as an offset)."""
+        if not B.get("GYRO_ZERO", True) or self.armed: self._gz_win.clear(); return
+        k = math.pi / 180.0
+        self._gz_win.append((t, gz_raw)); self._gz_win = [x for x in self._gz_win if t - x[0] <= B.get("GYRO_ZERO_S", 3.0)]
+        v = [x[1] for x in self._gz_win]
+        if len(v) >= 3 and t - self._gz_win[0][0] >= 0.6 * B.get("GYRO_ZERO_S", 3.0) and max(v) - min(v) < B.get("GYRO_STILL_DPS", 0.6) * k:
+            m = sum(v) / len(v)
+            if abs(m) < B.get("GYRO_BIAS_MAX_DPS", 5.0) * k:
+                if abs(m - self.gz_bias) > 0.2 * k: self.log(f"[bridge] gyro zero: gz offset {m / k:+.2f} deg/s")
+                self.gz_bias = m
+
     def _on_imu(self, d):
         t, sg = d["t"], B.get("GYRO_SIGN", 1)
-        gz = d.get("gz_rad", 0.0) * sg
+        if "gz_rad" in d: self._zero_gyro(t, d["gz_rad"])
+        gz = (d.get("gz_rad", 0.0) - self.gz_bias) * sg
         if "yaw_rad" in d: self.yaw = wrap(d["yaw_rad"] * sg)
         elif "gz_rad" in d and self.t_imu is not None: self.yaw = wrap(self.yaw + gz * min(0.2, max(0.0, t - self.t_imu)))
         self.gz = gz; self.pitch = d.get("pitch_rad", 0.0); self.roll = d.get("roll_rad", 0.0)
@@ -344,7 +361,9 @@ def main():
             try:
                 print(f"[ble] {letter} {pct} for 2 s"); tr.send(f"{letter} {pct}"); time.sleep(2.0)
             finally:                                           # Ctrl+C included; and wait for the write: the BLE thread is a daemon,
-                tr.send("STOP"); time.sleep(0.5); print("[ble] STOP")   # leaving at once could exit before STOP is on the air
+                t1 = time.monotonic()                          # leaving at once could exit before STOP is on the air
+                while not tr.send("STOP") and time.monotonic() - t1 < 15: time.sleep(0.2)   # link dropped mid-run (seen on the bench): wait for the reconnect
+                time.sleep(0.5); print("[ble] STOP" if tr.connected else "[ble] STOP NOT DELIVERED: link is down, cut the motor power")
         else:
             time.sleep(10.0)
         tr.close(); time.sleep(0.5); return
