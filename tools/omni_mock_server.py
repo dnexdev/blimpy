@@ -4,7 +4,8 @@
 
 Speaks the OpenAI-style realtime event vocabulary as the real relay does (checked live with the sponsored key):
 session.created/updated, server VAD (speech_started after ~1 s of mic packets, speech_stopped + committed +
-input_audio_transcription.completed 0.4 s later), scripted turns (a set_intent tool call or an audio reply, optionally "heard": the transcript sent for that turn),
+input_audio_transcription.completed 0.4 s later), scripted turns (a set_intent tool call or an audio reply, optionally "heard": the transcript sent for that turn;
+"heard_after_ms": N sends it N ms AFTER the reply started, as the real relay does, < 0 never; "tool_name": "stay_silent"),
 function_call_output + response.create -> audio reply, response.done with usage (null when cancelled by barge-in), and
 the relay's rule that an image is refused until audio has been appended. Not a model: every turn comes from `script`.
 """
@@ -56,9 +57,9 @@ class Mock:
                 rid = f"resp_{uuid.uuid4().hex[:8]}"; cid = f"call_{uuid.uuid4().hex[:8]}"
                 await ws.send(json.dumps({"type": "response.created", "response": {"id": rid}}))
                 await ws.send(json.dumps({"type": "response.function_call_arguments.done", "response_id": rid,
-                                          "call_id": cid, "name": "set_intent", "arguments": json.dumps(item["tool"])}))
+                                          "call_id": cid, "name": item.get("tool_name", "set_intent"), "arguments": json.dumps(item["tool"])}))
                 await ws.send(json.dumps({"type": "response.output_item.done", "response_id": rid,
-                                          "item": {"type": "function_call", "call_id": cid, "name": "set_intent",
+                                          "item": {"type": "function_call", "call_id": cid, "name": item.get("tool_name", "set_intent"),
                                                    "arguments": json.dumps(item["tool"])}}))
                 await ws.send(json.dumps({"type": "response.done", "response": {"id": rid, "status": "completed",
                                           "usage": {"input_tokens": 500, "output_tokens": 30, "total_tokens": 530, "output_tokens_details": {"text_tokens": 8, "audio_tokens": 22}}}}))
@@ -90,9 +91,21 @@ class Mock:
                         await ws.send(json.dumps({"type": "input_audio_buffer.committed", "item_id": iid}))
                         self.stats["audio_since_commit"] = 0
                         heard = (self.script[0].get("heard") if self.script else None) or "mock transcript"
-                        await ws.send(json.dumps({"type": "conversation.item.input_audio_transcription.completed", "item_id": iid,
-                                                  "transcript": heard, "language": "en", "emotion": "neutral"}))
-                        await next_turn()
+                        late = self.script[0].get("heard_after_ms") if self.script else None
+                        tr = json.dumps({"type": "conversation.item.input_audio_transcription.completed", "item_id": iid,
+                                         "transcript": heard, "language": "en", "emotion": "neutral"})
+                        if late is None:
+                            await ws.send(tr); await next_turn()
+                        else:                                           # the real relay: the transcript comes on its own clock, after the reply began
+                            async def send_late(tr=tr, late=late):
+                                await asyncio.sleep(late / 1000)
+                                if late >= 0: await ws.send(tr)
+                            asyncio.create_task(send_late() if late >= 0 else asyncio.sleep(0))     # heard_after_ms < 0: it never comes
+                            async def run_turn():
+                                nonlocal talking
+                                try: await next_turn()
+                                finally: talking = None
+                            talking = asyncio.create_task(run_turn())
                 elif t == "input_image_buffer.append":
                     if not self.stats.get("audio_since_commit"):    # the real relay: "Error append image before append audio"
                         self.stats["images_refused"] += 1
@@ -114,6 +127,9 @@ class Mock:
                     if self.stats["messages"] and self.stats["messages"][-1].get("_pending", True):
                         self.stats["messages"][-1]["_pending"] = False
                     talking = asyncio.create_task(audio_reply("Okay.", 3))
+                elif t == "response.cancel":
+                    self.stats["response_cancels"] = self.stats.get("response_cancels", 0) + 1
+                    if talking: talking.cancel()
                 elif t == "mock.close":
                     await ws.close(code=1001, reason="mock close")
                 elif t == "mock.stats":

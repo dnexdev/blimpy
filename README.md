@@ -171,6 +171,7 @@ python -m laptop.voice.usage_log          # token totals per model/purpose from 
 python tools/omni_report.py               # the two files + e-mail text the organisers want back
 python tools/omni_report.py --balance     # spent X of 200, and when the relay cuts the key off
 python tools/omni_report.py --sessions    # the relay's own bill, one row per session: seconds of audio sent -> units
+python tools/omni_report.py --reconcile   # the report, plus the ledger checked against the relay's bill (what was never logged)
 ```
 The key is a per-user environment variable on this laptop (`setx YIBU_API_KEY ...` was run once); every NEW PowerShell
 window has it. The e-mail says it expires 2026-09-20 08:00 EDT, but the relay itself reports access_until
@@ -216,8 +217,12 @@ schema `yibu_call_audit_v1`: model, purpose, tokens, latency, key suffix only; n
 sessions log one row per response (its `response.done` usage; null when barge-in cancelled the reply) plus one failed
 row per connection that never reached a session; focus-watch HTTP calls one row each. `python tools/omni_report.py`
 runs their `summarize_usage.py` and writes `data/omni_report/usage_summary.json` + `usage_by_model_key_purpose.csv`
-and prints the e-mail text (team, project link, period, key suffix, how calls were logged and the gaps). Calls made
-with their example scripts land in their own `artifacts/yibu_api_calls.jsonl`; merge with `--extra-log`.
+and prints the e-mail text (team, project link, period, key suffix, how calls were logged and the gaps; also saved as
+`data/omni_report/email_draft.txt`). The ledger is per machine (`data/` is not committed): copy every other machine's
+`data/omni_usage.jsonl` over and merge with `--extra-log` (repeatable). Calls made with their example scripts land in
+their own `artifacts/yibu_api_calls.jsonl`; the one under `tools/yibu/artifacts/` is merged by itself, any other with
+`--extra-log`. `--reconcile` (needs the key) holds the merged ledger against the relay's own per-session log and lists
+the relay rows with no ledger record in their time span; that count goes into the e-mail's gaps.
 
 **Verified live on the relay** (2026-09-19, `tools/omni_live_test.py`): audio format `pcm` both ways; voice `Tina`
 (`Cherry` is rejected and the server drops the socket); `semantic_vad` accepted; the server adds input transcription
@@ -291,10 +296,25 @@ A hackathon hall will talk to Blimpy all day. In order of payoff:
 2. **Level gate** in `feed_audio`: DONE (`MicGate`, section 1d; it is also what keeps the bill down). Only packets above
    the room's noise floor + `GATE_DB` go up, so background talkers at hall level never reach the cloud; tune with
    `python -m laptop.voice.omni --meter`.
-3. **Name gate**: DONE (`config.OMNI NAME_GATE`, on). The server transcribes every turn; one without "Blimpy" (or the
-   recogniser's spellings: Blippi, Limpie, ...) gets its reply cancelled and its command dropped. A follow-up within
-   8 s of Blimpy's last words, a stop word, or a press-to-talk turn always counts. The audio still goes up (it is what
-   gets transcribed), so a crowd can cost a little but cannot command the robot. The pilot's status line counts `ignored`.
+3. **Who is that for** (`omni.addressed`, `config.OMNI ADDRESS="smart"`): DONE. Not a wake phrase. The server transcribes
+   every turn and the turn is for Blimpy when (1) its name is ANYWHERE in the sentence ("turn left, Blimpy"), or it is a
+   stop word or a press-to-talk turn; (2) it is a follow-up: the person started talking within 8 s (5 s in a loud room) of
+   Blimpy's last words to an addressed turn AND the sentence is directed (an imperative from Blimpy's vocabulary, "can
+   you ...", a question to "you") or answers a question Blimpy just asked; (3) quiet room only: a directed sentence
+   while someone is near and centred in the balloon's eye (the FPV observation), a command said to its face.
+   "Yeah, recording started" is none of these, inside the window or not. Two more layers: the reply audio and the tool
+   calls of a turn are HELD until its transcript has been judged (on the relay the transcript arrives after the reply
+   has begun: the old gate let the first words out and, worse, that reply re-opened the follow-up window so the turn
+   approved itself), so a turn that is not for Blimpy makes no sound and runs nothing; and the model has a
+   `stay_silent` tool it is told to call instead of saying "mm-hm" (its "no" is final, its "yes" still needs the
+   rules). No transcript 1.5 s after the first held audio = judged without it. The pilot logs `ignored: <sentence>
+   [why]` and its status line shows `QUIET`/`LOUD` and the count. `ADDRESS="name"` is the strict old rule without the
+   window, `"open"` answers everything.
+   **Rooms**: `ADDRESS_MODE="auto"` reads the mic gate's noise floor (above -45 dBFS = loud, 3 dB hysteresis); `l` in the
+   pilot pins quiet / loud. Judging room = quiet: talk to it normally, name once, then follow-ups. The floor = loud:
+   name or a quick directed follow-up, close-talk mic, `GATE_DB_LOUD` from `--calibrate`, and `m` + `p` as the fallback.
+   `python -m laptop.voice.omni --debug` prints how long after `speech_stopped` each transcript came and how many
+   reply packets were held: check it once with the key (the hold costs that much latency on addressed turns).
 4. **Press-to-talk**: DONE (`p` in the pilot: the mic goes up in full for ONE command, past the gate and past mute, until
    you stop talking). Stage mode: `m` once, then `p` before each command. `--mic AirPods --spk Speakers` puts the mic at
    your ear and the voice on the laptop speakers; keep HALF_DUPLEX on.

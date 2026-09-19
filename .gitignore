@@ -6,6 +6,7 @@ firmware/include/secrets.h
 runs/
 datasets/
 data/
+tools/yibu/artifacts/
 models/*.pt
 *.pt
 targets/*.png

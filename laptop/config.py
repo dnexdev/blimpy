@@ -33,13 +33,22 @@ OMNI = dict(
     GATE_PREROLL_MS=320,     # audio kept from just before the gate opened (the first syllable)
     GATE_HANGOVER_MS=1000,   # audio kept after the last loud packet; must stay > the server VAD's 600 ms of silence
     GATE_LISTEN_S=5.0,       # on startup the gate listens to the room this long (nothing goes up), sets the floor, prints a verdict
-    # Name gate: a turn whose transcript has no "Blimpy" (or the recogniser's spellings of it) is NOT for Blimpy: its reply
-    # is cancelled and its command dropped. Exceptions: a follow-up within NAME_FOLLOWUP_S of Blimpy's last reply, stop
-    # words (safety), and a press-to-talk turn. The audio still goes up (it is what gets transcribed); a crowd cannot
-    # command the robot but can still cost a little. False = trust the model's own judgement of who is talking to it.
+    # Who is that for (omni.addressed): a turn is for Blimpy when its name is anywhere in the sentence, or it is a directed
+    # follow-up right after Blimpy spoke, or (quiet room) a command said to its face; stop words (safety) and press-to-talk
+    # always count. The reply and the tool calls of a turn are held until its transcript is judged, so team chatter makes
+    # no sound and runs nothing. The audio still goes up (it is what gets transcribed). False = answer everything.
     NAME_GATE=True,
     NAME_WORDS=("blimpy", "blimpie", "blippi", "limpie", "blimp", "limpy", "blimpey"),
-    NAME_FOLLOWUP_S=8.0,
+    NAME_FOLLOWUP_S=8.0,     # quiet room: a follow-up that starts this long after Blimpy's last words needs no name, IF it is
+                             # directed (a command, a request, a question to "you") or answers a question Blimpy asked
+    FOLLOWUP_LOUD_S=5.0,     # the same window in a loud room
+    ADDRESS="smart",         # who is that for (omni.addressed): smart = name anywhere / directed follow-up / said to its face in a
+                             # quiet room | name = the name, a stop word or p only | open = answer everything
+    ADDRESS_MODE="auto",     # auto = loud when the mic gate's noise floor is above LOUD_FLOOR_DB | quiet | loud   (pilot key l)
+    LOUD_FLOOR_DB=-45.0,
+    GATE_DB_LOUD=None,       # GATE_DB while the room is loud; None = unchanged. Take it from `omni --calibrate` on the floor.
+    VERDICT_TIMEOUT_S=1.5,   # replies are held until the turn's transcript is judged; this long without one = judged without it
+    PRESENCE_BEARING_RAD=0.35, PRESENCE_RANGE_M=3.0,   # "said to its face": someone this centred and this near in the FPV eye
 )
 
 # --- Eye on the balloon (laptop/vision/fpv.py): the Arduino/ESP32 camera on the gondola streams over the hotspot. It is

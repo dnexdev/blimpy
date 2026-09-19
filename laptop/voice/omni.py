@@ -40,15 +40,72 @@ JPEG_MAX_SIDE, JPEG_QUALITY, JPEG_MAX_B = 640, 70, 250_000   # provider limit: 2
 RELAY = dict(audio_in_tok_per_s=100, audio_out_tok_per_s=48000 / 3072, audio_in=8, text_in=1, text_out=6, audio_out=30,
              model=2, group=2, unit_quota=250_000)
 GATE = dict(open_db=12.0, min_dbfs=-50.0, preroll_ms=320, hangover_ms=1000)   # config.OMNI GATE_* override these in the pilot
-# Name gate: the server transcribes every turn; one without Blimpy's name (as the recogniser spells it) is not for Blimpy:
-# its reply is cancelled and its command dropped. Follow-ups within followup_s of Blimpy's last words, stop words and
-# press-to-talk turns always count. config.OMNI NAME_* override these in the pilot.
-NAME_GATE = dict(words=("blimpy", "blimpie", "blippi", "limpie", "blimp", "limpy", "blimpey"), followup_s=8.0)
+# Who is that for? The server transcribes every turn and addressed() below decides from the name, the state of the
+# conversation, what was said and who is in front of the eye. A turn that is not for Blimpy makes no sound and runs no
+# command: the reply and the tool calls of a turn are HELD until its transcript has been judged (the transcript comes on
+# its own clock, often after the first reply audio). config.OMNI NAME_* / ADDRESS* override these in the pilot.
+NAME_GATE = dict(words=("blimpy", "blimpie", "blippi", "limpie", "blimp", "limpy", "blimpey"),
+                 followup_s=8.0, followup_loud_s=5.0,   # how long after Blimpy's last words a follow-up needs no name (quiet / loud room)
+                 policy="smart",                        # smart: the rules in addressed() | name: the name, a stop word or press-to-talk only | open: everything
+                 mode="auto",                           # auto: loud when the mic gate's noise floor is above loud_floor_db | quiet | loud
+                 loud_floor_db=-45.0, gate_db_loud=None,   # gate_db_loud: GATE_DB used while the room is loud (None = unchanged)
+                 verdict_timeout_s=1.5)                 # no transcript this long after the first held reply audio: judged without the text
+
+# directed(): does the sentence read as something said TO a robot? An imperative from Blimpy's vocabulary at the start
+# (after fillers), a request ("can you ..."), or a question to "you". "yeah recording started" is none of these.
+FILLERS = ("ok", "okay", "now", "and", "then", "so", "please", "hey", "alright", "right", "um", "uh", "well", "also", "actually", "just", "yeah", "yes")
+REQUESTS = (("can", "you"), ("could", "you"), ("would", "you"), ("will", "you"), ("i", "want", "you"), ("i", "need", "you"), ("let's",), ("lets",))
+IMPERATIVES = {   # first word -> the words allowed next (None = anything; a bare imperative always counts)
+    "follow": None, "stay": None, "spin": None, "rotate": None, "dance": None, "wander": None, "roam": None, "explore": None,
+    "hover": None, "land": None, "fly": None, "float": None, "rise": None, "climb": None, "descend": None, "higher": None, "lower": None,
+    "go": ("to", "home", "up", "down", "higher", "lower", "left", "right", "back", "forward", "over", "there", "around"),
+    "come": ("here", "over", "back", "to", "with", "down", "up", "closer"),
+    "turn": ("left", "right", "around", "to", "by", "clockwise", "counter", "counterclockwise", "a"),
+    "look": ("at", "here", "over"), "watch": ("me", "this"), "keep": ("me", "an", "watching"), "tell": ("me", "us"), "show": ("me", "us"),
+    "set": ("timer", "pomodoro"), "start": ("timer", "pomodoro", "focus"), "cancel": ("timer", "pomodoro", "focus"),   # within the next 4 words
+}
+QUESTIONS = (r"\b(what|who|where|how|why) (do|can|are|did|would|will|were) you\b", r"\b(do|did|can|could|are|were|will|would|have) you\b",
+             r"\bwhat('s| is| are) (this|that|these|those|in my|on my)\b", r"\bwhat am i\b", r"\bhow (much time|long)\b",
+             r"\byour (name|battery|job)\b", r"\bwho are you\b")
 
 
 def is_addressed(text, words=NAME_GATE["words"]):
     low = (text or "").lower()
     return any(w in low for w in words)
+
+
+def directed(text):
+    low = (text or "").lower()
+    w = re.findall(r"[a-z']+", low)
+    while w and w[0] in FILLERS: w = w[1:]
+    if not w: return False
+    if any(tuple(w[:len(r)]) == r for r in REQUESTS): return True
+    if w[0] in ("up", "down", "left", "right") and len(w) <= 3: return True
+    if w[0] in IMPERATIVES:
+        nxt = IMPERATIVES[w[0]]
+        if nxt is None or len(w) == 1: return True
+        return any(x in nxt for x in (w[1:5] if w[0] in ("set", "start", "cancel") else w[1:2]))
+    return any(re.search(q, low) for q in QUESTIONS)
+
+
+def addressed(text, engaged=False, asked=False, presence=False, ptt=False, loud=False, policy="smart", words=NAME_GATE["words"]):
+    """Is this turn for Blimpy? -> (bool, why). text None = the transcript never came (judged on the rest).
+      1. the name anywhere in the sentence, a stop word, a press-to-talk turn            ("turn left, Blimpy": no "hey" needed)
+      2. engaged (the person started within the follow-up window of Blimpy's last words to an addressed turn)
+         AND (the sentence is directed() OR Blimpy had just asked a question)             (follow-ups, answers)
+      3. quiet room only: directed() AND someone is near and centred in Blimpy's eye      (a command to its face, cold)
+    Anything else is people talking to each other."""
+    if policy == "open": return True, "open"
+    if ptt: return True, "press-to-talk"
+    if text is not None and is_addressed(text, words): return True, "name"
+    if text is not None and is_stop(text): return True, "stop word"
+    if policy == "name": return False, "no name"
+    d = text is not None and directed(text)
+    if engaged and d: return True, "follow-up"
+    if engaged and asked: return True, "answer to Blimpy's question"
+    if not loud and d and presence: return True, "said to its face"
+    if engaged: return False, "in conversation, but not said to Blimpy"
+    return False, ("no name" + (", loud room" if loud and d else ""))
 
 
 def pick_device(spec, kind):
@@ -183,6 +240,13 @@ INTENT_TOOL = {
     },
 }
 
+SILENT_TOOL = {
+    "type": "function", "name": "stay_silent",
+    "description": "Call this, and say NOTHING, when what you heard was not said to you: people talking to each other, "
+                   "status updates between teammates, background speech, noise.",
+    "parameters": {"type": "object", "properties": {}, "required": []},
+}
+
 INSTRUCTIONS = """You are Blimpy, a small friendly helium-balloon robot that floats around a room, follows people and helps them
 focus. You hear the user through a microphone and SEE through a camera (a new frame about once a second): use what you
 see when it matters ("what am I holding", "is my posture okay", "what's on the whiteboard").
@@ -195,8 +259,10 @@ Rules:
 - If the user interrupts you mid-sentence, what they said is for you: act on it (a command -> set_intent, a question
   -> answer) and NEVER resume or repeat what you were saying. "Stop", "hold", "hover", "halt" always mean set_intent
   hover, also right after an interruption.
-- If speech is clearly not addressed to you (people talking to each other, noise), reply with a single short "Mm-hm."
-  at most. Anything that starts with "Blimpy" IS addressed to you.
+- You share the room with people who talk to EACH OTHER most of the time. Speech is for you only when it uses your
+  name ("Blimpy", anywhere in the sentence), continues a conversation you are having, or is plainly a command or a
+  question to a robot. Remarks between people ("yeah, recording started", "the code is running", "pass me that") are NOT
+  for you: call stay_silent and produce no speech at all, not even "okay" or "mm-hm". When in doubt, stay silent.
 - Never invent robot abilities you were not given. You cannot pick things up or leave the room."""
 
 # Safety net, independent of the model: a spoken stop acts the moment its transcription arrives (seen live: spoken over
@@ -225,7 +291,7 @@ SESSION = {
     "input_audio_format": os.environ.get("OMNI_AUDIO_FMT", "pcm"),
     "output_audio_format": os.environ.get("OMNI_AUDIO_FMT", "pcm"),
     "turn_detection": {"type": "semantic_vad", "threshold": 0.5, "silence_duration_ms": 600},
-    "tools": [INTENT_TOOL],
+    "tools": [INTENT_TOOL, SILENT_TOOL],
     "tool_choice": "auto",
 }
 
@@ -290,11 +356,18 @@ class OmniLive:
 
     def __init__(self, on_intent, frame_fn=None, api_key=None, model=None, url=None, session=None, fps=1.0,
                  mic=True, speaker=True, mic_device=None, spk_device=None, half_duplex=True, purpose="demo",
-                 usage_log=True, debug=False, on_text=None, gate=True, name_gate=True):
+                 usage_log=True, debug=False, on_text=None, gate=True, name_gate=True, presence_fn=None):
         self.on_intent, self.frame_fn, self.fps = on_intent, frame_fn, fps
         self.gate = gate if isinstance(gate, MicGate) else (MicGate(**gate) if isinstance(gate, dict) else (MicGate() if gate else None))
         self.name_gate = (dict(NAME_GATE, **name_gate) if isinstance(name_gate, dict) else (dict(NAME_GATE) if name_gate else None))
-        self._ignore_turn = False; self._ptt_turn = False; self.t_last_reply = 0.0      # name gate state
+        # Addressing state. _turn is the user turn being judged: {"t0", "verdict": None|True|False, "audio": [held reply
+        # pcm], "calls": [held tool calls], "engaged", "asked", "presence", "ptt"}. presence_fn() -> True when someone is
+        # near and centred in Blimpy's eye (the pilot builds it from the FPV observation); None = that rule is off.
+        self.presence_fn = presence_fn
+        self._turn = None; self._tlock = threading.RLock(); self._ptt_turn = False; self.t_last_reply = 0.0
+        self._resp_client = False; self._client_creates = 0      # is the running response one WE asked for (say, tool result)? never held
+        self._asked = False; self._loud = False; self.last_verdict = ""; self._resp_played = False
+        self._gate_db = self.gate.open_db if self.gate else None
         self.cost = {"audio_in_s": 0.0, "audio_out_s": 0.0, "text_in": 0, "text_out": 0}   # what the relay charges for, this session
         self.key = api_key or API_KEY
         self.model, self.url = model or MODEL, url or URL
@@ -394,10 +467,16 @@ class OmniLive:
         elif t == "response.audio.delta":
             if not self.t_first_audio: self.t_first_audio = time.monotonic()
             pcm = base64.b64decode(ev.get("delta", "")); self.stats["audio_out"] += len(pcm); self.cost["audio_out_s"] += len(pcm) / 2 / OUT_RATE
-            if not self._ignore_turn: self.t_last_reply = time.monotonic()
-            if self.spk: self.spk.write(pcm)
+            turn = self._turn
+            with self._tlock:
+                verdict = True if (self._resp_client or turn is None) else turn["verdict"]
+                if verdict is None:                       # not judged yet: hold the reply, make no sound
+                    turn["audio"].append(pcm)
+                    if len(turn["audio"]) == 1 and self.name_gate:
+                        tm = threading.Timer(self.name_gate["verdict_timeout_s"], self._judge, [turn, None]); tm.daemon = True; tm.start()
+            if verdict: self._play(pcm)                   # verdict False: the reply to someone else's sentence is dropped
         elif t == "input_audio_buffer.speech_started":
-            self._ignore_turn = False                     # a new turn: judged again when its transcript arrives
+            self._new_turn()                              # judged when its transcript arrives
             if self.spk: self.spk.flush()                 # barge-in: user talks over Blimpy
         elif t == "input_audio_buffer.speech_stopped":
             self.t_speech_stopped = time.monotonic(); self._ptt_until = 0.0      # a press-to-talk turn ends here
@@ -411,18 +490,18 @@ class OmniLive:
                 self._tool_call(item.get("call_id"), item.get("name"), item.get("arguments"))
         elif t == "response.audio_transcript.done" or t == "response.text.done":
             txt = ev.get("transcript") or ev.get("text") or ""
-            if txt: self.transcript.append(("blimpy", txt)); self._log("blimpy", txt)
+            turn = self._turn
+            with self._tlock:
+                held = turn is not None and not self._resp_client and turn["verdict"] is None
+                if held: turn["reply_text"] = txt         # logged if the turn turns out to be for Blimpy
+            if txt and self._resp_played and not held: self._said(txt)
         elif t == "conversation.item.input_audio_transcription.completed":
             txt = ev.get("transcript") or ""
-            now = time.monotonic()
-            addressed = (self.name_gate is None or is_addressed(txt, self.name_gate["words"]) or is_stop(txt) or self._ptt_turn
-                         or now - self.t_last_reply < self.name_gate["followup_s"])
-            self._ptt_turn = False
-            if not addressed:                             # someone else talking: cancel the reply, drop any command of this turn
-                self._ignore_turn = True; self.stats["ignored"] = self.stats.get("ignored", 0) + 1
-                if self.spk: self.spk.flush()
-                if self._resp_active: self.send({"type": "response.cancel"})
-                if txt: self.transcript.append(("ignored", txt)); self._log("ignored", txt)
+            turn = self._turn or self._new_turn()
+            if self.debug and self.t_speech_stopped: print(f"\n[omni] transcript {time.monotonic() - self.t_speech_stopped:.2f} s after speech_stopped, "
+                                                           f"{len(turn['audio'])} reply packets held")
+            if not self._judge(turn, txt):                # someone else talking: no sound, no command
+                if txt: self.transcript.append(("ignored", txt)); self._log("ignored", f"{txt}   [{self.last_verdict}]")
                 return
             if txt: self.transcript.append(("you", txt)); self._log("you", txt)
             if is_stop(txt):                              # local stop: hover now, whether or not the model calls the tool
@@ -433,11 +512,13 @@ class OmniLive:
                 if self._resp_active: self.send({"type": "response.cancel"})   # seen live: it would resume its story otherwise
                 self.say("you stopped and are holding position now (one short sentence, no tool call)")
         elif t == "response.created":
-            self._t_resp = time.monotonic(); self.t_first_audio = 0.0; self._resp_active = True
+            self._t_resp = time.monotonic(); self.t_first_audio = 0.0; self._resp_active = True; self._resp_played = False
+            self._resp_client = self._client_creates > 0          # ours (say / tool result), or the server's answer to a spoken turn
+            if self._resp_client: self._client_creates -= 1
         elif t == "response.done":
             self.stats["responses"] += 1; self._resp_active = False
             r = ev.get("response") or {}
-            if r.get("status") == "completed" and not self._ignore_turn: self.t_last_reply = time.monotonic()
+            if r.get("status") == "completed" and self._resp_played: self.t_last_reply = time.monotonic()
             od = ((r.get("usage") or {}).get("output_tokens_details") or (r.get("usage") or {}).get("output_token_details") or {})
             self.cost["text_out"] += od.get("text_tokens", 0) or 0
             if self.usage_log:
@@ -447,14 +528,14 @@ class OmniLive:
                                  r.get("usage"), r.get("status_details") if r.get("status") == "failed" else None,
                                  path=self.usage_path, status_code=101)
             if self._after_done:
-                self.send({"type": "response.create"}); self._after_done.clear()
+                self._after_done.clear(); self._respond()
         elif t == "error":
             e = ev.get("error") or ev
             msg = str(e.get("message", ""))
             if "append image" in msg:                          # a frame raced a commit: harmless, the next one goes
                 self.stats["img_refused"] = self.stats.get("img_refused", 0) + 1; self._audio_since_commit = 0
             elif "active response" in msg:                     # our response.create raced a server-started one: retry after it
-                self._resp_active = True; self._after_done.append(True)
+                self._resp_active = True; self._after_done.append(True); self._client_creates = max(0, self._client_creates - 1)
             else:
                 self.last_error = f"server: {e.get('message') or e}"
                 print(f"[omni] error: {e}")
@@ -468,11 +549,26 @@ class OmniLive:
         self._done_calls.add(call_id); self.stats["calls"] += 1
         try: d = json.loads(args) if isinstance(args, str) else dict(args or {})
         except ValueError: d = {}
-        if self._ignore_turn:                             # name gate: the turn was not for Blimpy; answer the call, run nothing
+        turn = self._turn
+        if name == "stay_silent":                         # the model itself says: not for me. Its "no" is final for this turn.
+            self.stats["silent"] = self.stats.get("silent", 0) + 1
             self.send({"type": "conversation.item.create",
-                       "item": {"type": "function_call_output", "call_id": call_id,
-                                "output": json.dumps({"result": "ignored: that was not addressed to you. Stay quiet."})}})
+                       "item": {"type": "function_call_output", "call_id": call_id, "output": json.dumps({"result": "ok"})}})
+            if turn is not None and not self._resp_client: self._judge(turn, None, force=(False, "the model stayed silent"))
             return
+        if turn is not None and not self._resp_client:
+            with self._tlock:
+                if turn["verdict"] is None: turn["calls"].append((call_id, name, d)); return      # held until the turn is judged
+            if turn["verdict"] is False: return self._call_ignored(call_id)
+        self._exec_call(call_id, name, d)
+
+    def _call_ignored(self, call_id):
+        """The turn was not for Blimpy: answer the call, run nothing, ask for no reply."""
+        self.send({"type": "conversation.item.create",
+                   "item": {"type": "function_call_output", "call_id": call_id,
+                            "output": json.dumps({"result": "ignored: that was not addressed to you. Stay quiet."})}})
+
+    def _exec_call(self, call_id, name, d):
         if name != "set_intent":
             out = f"unknown tool {name}"
         else:
@@ -486,7 +582,72 @@ class OmniLive:
     def _respond(self):
         """response.create now, or right after the running response finishes (the relay refuses a second one)."""
         if self._resp_active: self._after_done.append(True)
-        else: self.send({"type": "response.create"})
+        elif self.send({"type": "response.create"}): self._client_creates += 1
+
+    # ------------------------------------------------------------------ who is that for
+    @property
+    def loud(self):
+        """Loud room (the science-fair floor) or quiet room (the judging room)? From the mic gate's noise floor, 3 dB of
+        hysteresis, read only while the gate is shut (a voice is not the room). name_gate mode quiet / loud pins it."""
+        ng = self.name_gate
+        if not ng: return False
+        if ng["mode"] in ("quiet", "loud"): return ng["mode"] == "loud"
+        g = self.gate
+        if g is not None and g.ready and not g.open and g.floor is not None:
+            self._loud = g.floor > ng["loud_floor_db"] + (-3.0 if self._loud else 3.0)
+        return self._loud
+
+    def cycle_mode(self):
+        """auto -> quiet -> loud -> auto (the pilot's l key)."""
+        if not self.name_gate: return "off"
+        self.name_gate["mode"] = {"auto": "quiet", "quiet": "loud", "loud": "auto"}[self.name_gate["mode"]]
+        return self.name_gate["mode"]
+
+    def _new_turn(self):
+        now = time.monotonic(); ng = self.name_gate; loud = self.loud
+        if self.gate and ng and ng["gate_db_loud"] is not None: self.gate.open_db = ng["gate_db_loud"] if loud else self._gate_db
+        try: presence = bool(self.presence_fn()) if self.presence_fn else False
+        except Exception: presence = False
+        talking = self._resp_active and self._resp_played                  # talking over Blimpy is talking to Blimpy
+        engaged = bool(ng) and (talking or (self.t_last_reply > 0 and now - self.t_last_reply < ng["followup_loud_s" if loud else "followup_s"]))
+        self._turn = {"t0": now, "verdict": None if ng else True, "audio": [], "calls": [], "engaged": engaged, "asked": self._asked,
+                      "presence": presence, "loud": loud, "timed_out": False}
+        return self._turn
+
+    def _play(self, pcm):
+        self._resp_played = True; self.t_last_reply = time.monotonic()
+        if self.spk: self.spk.write(pcm)
+
+    def _said(self, txt):
+        self.transcript.append(("blimpy", txt)); self._log("blimpy", txt)
+        self._asked = txt.rstrip().endswith("?")          # an answer to Blimpy's own question needs no name
+
+    def _judge(self, turn, text, force=None):
+        """Settle a turn once: release what was held (reply audio, tool calls) or drop it. text None = the timeout (no
+        transcript yet); a transcript that arrives after a timed-out "no" and carries the name gets a fresh reply."""
+        with self._tlock:
+            ng = self.name_gate
+            if turn["verdict"] is not None:
+                if turn["verdict"] is False and turn["timed_out"] and text is not None and turn is self._turn:
+                    ok, why = addressed(text, ptt=False, policy="name", words=ng["words"])
+                    if ok: turn["verdict"] = True; turn["timed_out"] = False; self.last_verdict = why + " (late transcript)"; self._respond()
+                return turn["verdict"]
+            ok, why = force or addressed(text, engaged=turn["engaged"], asked=turn["asked"], presence=turn["presence"], ptt=self._ptt_turn,
+                                         loud=turn["loud"], policy=ng["policy"], words=ng["words"])
+            if text is None and not force: turn["timed_out"] = True; why += " (no transcript yet)"
+            if text is not None: self._ptt_turn = False
+            turn["verdict"] = ok; self.last_verdict = why
+            audio, calls = turn["audio"], turn["calls"]; turn["audio"], turn["calls"] = [], []
+            said = turn.pop("reply_text", None)
+        if ok:
+            for pcm in audio: self._play(pcm)
+            if said and audio: self._said(said)
+            for c in calls: self._exec_call(*c)
+        else:
+            self.stats["ignored"] = self.stats.get("ignored", 0) + 1
+            for c in calls: self._call_ignored(c[0])
+            if self._resp_active and not self._resp_client: self.send({"type": "response.cancel"})
+        return ok
 
     # ------------------------------------------------------------------ inputs
     def push_to_talk(self, max_s=10.0):
@@ -562,7 +723,8 @@ class OmniLive:
         if g is None: return f"mic {self.stats['audio_in'] / 32000:.0f}s ~{self.units():.2f}u"
         state = "PTT " if self.ptt else ("MUTED" if self.muted else ("OPEN" if g.open else "shut"))
         ign = f" ignored {self.stats['ignored']}" if self.stats.get("ignored") else ""
-        return f"mic {g.sent_s:.0f}/{g.total_s:.0f}s {state} {g.level:.0f}dB>{g.threshold:.0f} ~{self.units():.2f}u{ign}"
+        room = "" if not self.name_gate else (" LOUD" if self.loud else " QUIET") + ("" if self.name_gate["mode"] == "auto" else "!")
+        return f"mic {g.sent_s:.0f}/{g.total_s:.0f}s {state} {g.level:.0f}dB>{g.threshold:.0f} ~{self.units():.2f}u{room}{ign}"
 
 
 if __name__ == "__main__":

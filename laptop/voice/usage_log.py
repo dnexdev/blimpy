@@ -66,6 +66,32 @@ def relay_sessions(key, timeout=15):
     return out
 
 
+def reconcile(ledger_rows, relay_rows, slack_s=120):
+    """Ledger against the relay's own bill (relay_sessions), per model. The relay has one row per realtime SESSION, the
+    ledger one per response, so rows are matched by time, not counted: a relay row is `unlogged` when no ledger row of
+    its model falls inside its span (created_at - use_s .. created_at, +- slack_s). Those are calls made where this
+    ledger was not (another machine, the organisers' examples run elsewhere, a session that died before response.done).
+    Returns {model: {"relay_rows", "relay_prompt", "relay_completion", "relay_units", "ledger_calls", "ledger_in",
+    "ledger_out", "ledger_missing", "unlogged": [relay rows]}}."""
+    import datetime
+    out, stamps = {}, {}
+    def slot(m):
+        return out.setdefault(m, {"relay_rows": 0, "relay_prompt": 0, "relay_completion": 0, "relay_units": 0.0, "ledger_calls": 0,
+                                  "ledger_in": 0, "ledger_out": 0, "ledger_missing": 0, "unlogged": []})
+    for r in ledger_rows:
+        s = slot(r.get("model")); s["ledger_calls"] += 1
+        s["ledger_in"] += r.get("input_tokens") or 0; s["ledger_out"] += r.get("output_tokens") or 0
+        if not r.get("usage_reported"): s["ledger_missing"] += 1
+        if r.get("timestamp_utc"):
+            stamps.setdefault(r.get("model"), []).append(datetime.datetime.fromisoformat(r["timestamp_utc"]).timestamp())
+    for x in relay_rows:
+        s = slot(x.get("model")); s["relay_rows"] += 1; s["relay_units"] += x.get("units") or 0.0
+        s["relay_prompt"] += x.get("prompt") or 0; s["relay_completion"] += x.get("completion") or 0
+        t = x.get("t") or 0; lo, hi = t - (x.get("use_s") or 0) - slack_s, t + slack_s
+        if not any(lo <= ts <= hi for ts in stamps.get(x.get("model"), [])): s["unlogged"].append(x)
+    return out
+
+
 def summary(path=None):
     """Totals per (model, purpose) for a quick look:  python -m laptop.voice.usage_log"""
     p = path or DEFAULT_PATH
