@@ -169,6 +169,9 @@ class MicGate:
         f = self.floor if self.floor is not None else -100.0
         room = ("LOUD room: hold a headset mic close to your mouth, or use hold-to-talk" if f > -35 else
                 "noisy room: a close-talk mic is recommended" if f > -45 else "quiet room: the laptop mic is fine")
+        if f < -85:                                       # no real room is this quiet: the device is delivering digital silence
+            room = ("WARNING: the mic is sending SILENCE, not room noise. A Bluetooth headset mic only runs while its "
+                    "hands-free link is up: check Windows Sound > Input shows its level moving, or pick another --mic")
         return f"room listened to for {self.warmup_s:.0f} s: noise floor {f:.0f} dBFS, the gate opens above {self.threshold:.0f} dBFS ({room})"
 
     @property
