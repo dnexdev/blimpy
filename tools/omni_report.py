@@ -19,7 +19,23 @@ ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDe
 ap.add_argument("--log", default=DEFAULT_PATH); ap.add_argument("--out", default="data/omni_report")
 ap.add_argument("--email", default="<application e-mail>")
 ap.add_argument("--extra-log", action="append", default=[], help="other ledgers to merge (e.g. the organisers' examples' artifacts/yibu_api_calls.jsonl)")
+ap.add_argument("--balance", action="store_true", help="ask the relay what the key has spent and when it expires (needs YIBU_API_KEY), then exit")
 a = ap.parse_args()
+
+if a.balance:
+    import datetime, requests, zoneinfo
+    key = os.environ.get("YIBU_API_KEY") or os.environ.get("OMNI_API_KEY") or sys.exit("set YIBU_API_KEY")
+    H = {"Authorization": "Bearer " + key}
+    sub = requests.get("https://yibuapi.com/v1/dashboard/billing/subscription", headers=H, timeout=20).json()
+    today = datetime.date.today()
+    use = requests.get(f"https://yibuapi.com/v1/dashboard/billing/usage?start_date={today - datetime.timedelta(days=7)}&end_date={today + datetime.timedelta(days=1)}",
+                       headers=H, timeout=20).json()
+    spent, limit = use.get("total_usage", 0) / 100.0, sub.get("hard_limit_usd")
+    until = sub.get("access_until")
+    et = zoneinfo.ZoneInfo("America/Toronto")
+    print(f"key ...{key[-4:]}: spent {spent:.2f} of {limit} (relay units, {100 * spent / limit if limit else 0:.1f} %) in the last 7 days; "
+          f"access until {datetime.datetime.fromtimestamp(until, et).strftime('%Y-%m-%d %H:%M %Z') if until else '?'}")
+    sys.exit(0)
 
 rows = []
 for p in [a.log, *a.extra_log]:

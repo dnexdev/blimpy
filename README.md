@@ -169,7 +169,9 @@ python -m laptop.voice.usage_log          # token totals per model/purpose from 
 python tools/omni_report.py               # the two files + e-mail text the organisers want back
 ```
 The key is a per-user environment variable on this laptop (`setx YIBU_API_KEY ...` was run once); every NEW PowerShell
-window has it. It expires 2026-09-20 08:00 EDT.
+window has it. The e-mail says it expires 2026-09-20 08:00 EDT, but the relay itself reports access_until
+2026-09-20 02:51 EDT (`GET /v1/dashboard/billing/subscription`): plan for the EARLIER one. Spend so far:
+`GET /v1/dashboard/billing/usage?start_date=...&end_date=...` (cents) against `hard_limit_usd`; see tools/omni_report.py --balance.
 
 Knobs: `config.OMNI` (CAMERA = what Blimpy sees, FPS, WATCH_S, HALF_DUPLEX), env `OMNI_MODEL` (default
 `qwen3.5-omni-plus-realtime`), `OMNI_URL`, `OMNI_VOICE` (default `Tina`), `OMNI_AUDIO_FMT` (default `pcm`).
