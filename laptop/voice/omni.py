@@ -295,8 +295,11 @@ class OmniLive:
                 self.send({"type": "response.create"}); self._after_done.clear()
         elif t == "error":
             e = ev.get("error") or ev
-            if "append image" in str(e.get("message", "")):       # a frame raced a commit: harmless, the next one goes
+            msg = str(e.get("message", ""))
+            if "append image" in msg:                          # a frame raced a commit: harmless, the next one goes
                 self.stats["img_refused"] = self.stats.get("img_refused", 0) + 1; self._audio_since_commit = 0
+            elif "active response" in msg:                     # our response.create raced a server-started one: retry after it
+                self._resp_active = True; self._after_done.append(True)
             else:
                 self.last_error = f"server: {e.get('message') or e}"
                 print(f"[omni] error: {e}")

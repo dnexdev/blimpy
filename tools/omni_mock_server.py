@@ -105,6 +105,11 @@ class Mock:
                     if item.get("type") == "function_call_output": self.stats["tool_outputs"].append(item)
                     else: self.stats["messages"].append(item)
                 elif t == "response.create":
+                    if talking is not None:                         # the real relay refuses a second response
+                        self.stats["response_creates_refused"] = self.stats.get("response_creates_refused", 0) + 1
+                        await ws.send(json.dumps({"type": "error", "error": {"type": "invalid_request_error",
+                                                  "message": "Conversation already has an active response"}}))
+                        continue
                     self.stats["response_creates"] += 1
                     if self.stats["messages"] and self.stats["messages"][-1].get("_pending", True):
                         self.stats["messages"][-1]["_pending"] = False
