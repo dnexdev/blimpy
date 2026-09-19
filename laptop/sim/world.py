@@ -24,7 +24,7 @@ REAL = dict(
     # MPU6050 after a 2 s boot calibration: residual bias + noise
     gyro_bias=0.004, gyro_noise=0.003,
     # VL53L0X on the gondola looking down: 2 cm noise, occasional timeout (-1), a false short reading now and then.
-    # tof=False here on purpose: fake_esp32 turns it on (the real gondola has one); the scenario suite keeps it off so
+    # tof=False here on purpose (and the 2026-09-19 box has no ultrasonic; ble_gondola --fake --tof adds one); the suite keeps it off so
     # seeded runs stay bit-identical to before (the V motor's tilt term leaks a little thrust into xy, and that is enough
     # to flip seed-marginal detours: python tools/scenarios.py --tof shows which). ToF scenarios pass tof=True.
     tof=False, tof_noise=0.02, tof_drop_p=0.03, tof_false_p=0.003, tof_max=2.0, tof_bias=0.0,

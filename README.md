@@ -246,11 +246,11 @@ Hardware on hand: one Arduino/ESP32 camera, one Pi camera module, one ultrasonic
 | where | what | gives | code |
 |---|---|---|---|
 | **on the gondola, looking forward, tilted ~15 deg down** | the Arduino camera (ESP32-CAM style, MJPEG over the hotspot) | Blimpy's own **eye**: what it sees in conversation (OMNI), and the person to follow: **bearing straight from the image** (no heading calibration, no learning push) + range from the person's height in the frame | `laptop/vision/fpv.py`, `config.FPV`, `pilot --fpv URL` |
-| **on the gondola, looking down** | the ultrasonic | height above the floor -> altitude hold without any camera. The firmware prints it in the IMU line (`alt=87.3`, cm); the bridge forwards it as telemetry `alt` | `config.BLE ALT_KEYS / ALT_UNITS`, `estimator.update_telem` |
+| **on the gondola, looking down** | an ultrasonic: **none on the 2026-09-19 box** (it ran out of pins). If one is ever added, the firmware prints it in the IMU line (`alt=87.3`, cm) and the bridge forwards it as telemetry `alt` | height above the floor -> altitude hold without any camera; meanwhile height comes from the room camera | `config.BLE ALT_KEYS / ALT_UNITS`, `estimator.update_telem` |
 | **in the room, on a tripod / table, ~1.8 m up** | the Pi camera (needs a Pi streaming `rpicam-vid` to `udp://@:5000`), or the laptop webcam, or a phone (DroidCam) | x/y/z of the balloon and the person in the room: hover-in-place, go_to judges, wander, wall avoidance | `laptop/vision/mono.py` (one camera), `localize.py` (two) |
 
 Why not two in the room: the ESP32-CAM is low-res and 250 ms late, poor for triangulation, and the eye is the better
-OMNI story. Why not two on the balloon: weight. **No room camera at all?** `pilot --relative`: the eye + ultrasonic fly
+OMNI story. Why not two on the balloon: weight. **No room camera at all?** `pilot --relative` (needs the altimeter, so not with the 2026-09-19 box): the eye + ultrasonic fly
 FOLLOW, ROTATE and HOVER-still; GO_TO and WANDER are refused ("I can't see the room from up here"). Nothing senses walls
 in that mode: the person leads, keep 1 m off the walls.
 
@@ -258,14 +258,15 @@ Offline, all of it runs against the simulated eye (`laptop/sim/world.py`, `fpv=T
 ```powershell
 python tools/fpv_test.py                       # geometry, sim eye vs truth, relative mode, sign of the follow law (19 checks)
 python tools/scenarios.py eye                  # eye + room camera walk; eye-only static / walk / rotate (no room camera)
-python -m laptop.control.ble_gondola --fake --sim      # the simulated robot now has the ultrasonic and the eye (--no-tof / --no-fpv)
+python -m laptop.control.ble_gondola --fake --sim      # the simulated robot has the eye (--no-fpv); --tof adds an ultrasonic (the real box has none)
 python -m laptop.control.pilot --no-voice              # FOLLOW uses the eye for yaw; add --relative to pretend there is no room camera
 ```
 
 **On the real thing, in this order** (each step is a go/no-go for the next):
-1. Ultrasonic: hardware team adds `alt=<cm>` to the IMU line, pointing down. `python -m laptop.control.ble_gondola --probe`
-   must show `alt=` changing as you lift the gondola; `curl http://127.0.0.1:5008/status` shows `alt` in metres.
-   Set `config.BLE ALT_UNITS` to what they print. Measure sensor-to-balloon-centre -> `config.PHYS TOF_BELOW`.
+1. Ultrasonic: none on the 2026-09-19 box (no pins left), skip. If one is ever added: the firmware appends `alt=<cm>` to
+   the IMU line, pointing down; `python -m laptop.control.ble_gondola --probe` must show `alt=` changing as you lift the
+   gondola; `curl http://127.0.0.1:5008/status` shows `alt` in metres; `config.BLE ALT_UNITS` = what they print;
+   sensor-to-balloon-centre -> `config.PHYS TOF_BELOW`.
 2. Eye stream: flash the ESP32-CAM CameraWebServer sketch with the laptop hotspot's SSID/password (`blimpy` / see
    `firmware/`), 640x480, find its IP (`python tools/find_phone.py`), open `http://<ip>:81/stream` in a browser.
    Then `python -m laptop.vision.fpv --source http://<ip>:81/stream --show`: green box on you, bearing sign flips as
@@ -492,14 +493,14 @@ Now, with the gondola on Bluetooth (bridge running), the motors and a kitchen sc
    `w` x5 (0.5 = the mixer cap). Expect ~4.5 / 8 / 12 g. `T_MAX = 9.81e-3 * g(0.5) / 0.25` N; check g(0.5)/g(0.3) ~ 2.8
    (thrust ~ duty^2; if not, note the exponent). Then `s` x3/4/5: `REV_EFF = g(-0.5) / g(+0.5)`. Repeat for a second motor to
    see the spread (REAL `motor_gain` in world.py).
-2. **M_GONDOLA**: the complete flight gondola with battery, props, ToF and wire, on the scale.
+2. **M_GONDOLA**: the complete flight gondola with battery, props and wire, on the scale.
 3. **MOTOR_SPACING**: ruler, L to R axis.
-4. **TOF_BELOW (partial)**: tape from the lens to the gondola's hanging point + `R_BALLOON`; final value once the balloon hangs.
+4. **TOF_BELOW**: only with an ultrasonic fitted (none on the 2026-09-19 box): lens to the hanging point + `R_BALLOON`, final once it hangs.
 5. **IMU sign**: section 3 step 1.
 
 Later, with the balloon inflated:
-6. **D**: tape round the equator / pi. **TOF_BELOW (final)**: balloon hanging still, tape floor->lens (h) and floor->equator
-   (z_c): `TOF_BELOW = z_c - h`; telemetry `alt` must read h +- 0.03.
+6. **D**: tape round the equator / pi. (With an ultrasonic: balloon hanging still, floor->lens h, floor->equator z_c,
+   `TOF_BELOW = z_c - h`; telemetry `alt` must read h +- 0.03.)
 7. **ARM_BELOW**: tape from the motor plane to the equator.
 8. **Free lift** (world.py `FREE_LIFT_N`, and the ballast trim): motors off, release at rest, time the second metre of sinking:
    `F = -0.268 * v^2` (0.19 m/s -> -0.010 N ~ -1 gf). Trim with 1 g coins until it sinks that slowly.

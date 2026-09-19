@@ -90,7 +90,8 @@ BLE = dict(
                           # hold the gondola still ~3 s before arming. Bench 2026-09-19: gz rests at -0.36 deg/s, noise 0.06.
     GYRO_SIGN=1,          # -1 if turning the gondola counter-clockwise (seen from above) gives a NEGATIVE gz
     IMU_FRESH_MS=200,     # yaw-rate feedback in the mixer only with a sample younger than this
-    ALT_KEYS=("alt", "range", "dist", "sonar", "us"),   # the ultrasonic (downward) in the same IMU line, first key found wins
+    ALT_KEYS=("alt", "range", "dist", "sonar", "us"),   # a downward ultrasonic in the same IMU line, first key found wins.
+                          # NONE on the 2026-09-19 box (it ran out of pins): the path stays for when one is fitted
     ALT_UNITS="cm",       # "cm" | "mm" | "m" as the firmware prints it; <= 0 = no echo. Telemetry alt is metres, -1 = none
     ALT_FRESH_MS=300,     # older than this -> alt -1 (the estimator then falls back to the room camera for height)
     HTTP_PORT=5008,       # GET http://127.0.0.1:5008/imu | /imu/history?n=200 | /status
@@ -123,7 +124,8 @@ PHYS = dict(
     T_MAX=0.050 * 9.81,   # N per motor at duty 1.0 (~50 gf). MEASURE: one motor on a kitchen scale at duty 0.3 / 0.4 / 0.5
     REV_EFF=0.6,          # reverse / forward thrust at the same duty (fixed prop + DRV8833 slow decay). MEASURE: same rig, reverse
     ARM_BELOW=0.55,       # m, motor plane below the balloon centre (pendulum arm). MEASURE: tape, balloon hanging
-    TOF_BELOW=0.60,       # m, VL53L0X lens below the balloon centre: centre z = alt + TOF_BELOW. MEASURE (README 3b)
+    TOF_BELOW=0.60,       # m, downward ultrasonic lens below the balloon centre: centre z = alt + TOF_BELOW. UNUSED on the
+                          # 2026-09-19 box (no ultrasonic); measure it (README 3b) if one is ever fitted
     M_GONDOLA=0.25,       # kg, flight gondola with battery and props. MEASURE: scale
     MOTOR_SPACING=0.25,   # m between the L and R motor axes. MEASURE: ruler
 )

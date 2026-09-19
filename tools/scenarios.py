@@ -118,7 +118,7 @@ def follow(realism, person, seconds, seed, psi0=1.0, t_settle=25, d_tol=0.3, hea
     ]
 
 
-EYE = dict(fpv=True, tof=True)     # the eye on the balloon + the ultrasonic, as the real gondola has
+EYE = dict(fpv=True, tof=True)     # the eye on the balloon + an ultrasonic (the 2026-09-19 box has none; these keep the code path exercised)
 
 
 def sc_follow_eye_walk(seed):

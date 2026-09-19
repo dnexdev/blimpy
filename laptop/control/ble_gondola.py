@@ -56,6 +56,30 @@ class Transport:
     def close(self): pass
 
 
+def lines_of(data):
+    """One BLE notification -> the IMU lines in it. Normally one; a firmware that batches sends several, newline-separated."""
+    text = bytes(data).decode("utf-8", "replace") if isinstance(data, (bytes, bytearray)) else str(data)
+    return [s for s in (x.strip() for x in text.replace("\r", "\n").split("\n")) if s]
+
+
+def probe_verdict(got, secs):
+    """The probe's last line: how many IMU lines arrived in `secs` and whether that rate is enough. The laptop prints every
+    notification the moment it arrives (bleak callback, no timer), so this is the rate the firmware actually notifies at.
+    Bench 2026-09-19: 10 lines in 10 s (the hardware team's firmware notified once a second while reading the IMU every 10 ms)."""
+    n = len(got); ok = [t for t, d in got if d is not None]
+    if n == 0: return f"[probe] 0 lines in {secs:.0f} s: nothing arrived. Is the telemetry characteristic notifying?"
+    gaps = sorted(b - a for a, b in zip(ok, ok[1:]))
+    hz = n / secs
+    need = 1000.0 / B.get("IMU_FRESH_MS", 200)      # below this the mixer runs open loop (no yaw-rate feedback)
+    s = f"[probe] {n} lines in {secs:.0f} s = {hz:.1f} per second"
+    if gaps: s += f", gap median {1000 * gaps[len(gaps) // 2]:.0f} ms max {1000 * gaps[-1]:.0f} ms"
+    if n - len(ok): s += f", {n - len(ok)} not parsed"
+    if hz >= 20: return s + ": OK"
+    if hz >= need: return s + ": SLOW (flies, but ask the hardware team for one notification per IMU sample, 20-50 per second)"
+    return s + (f": TOO SLOW: the yaw loop runs blind below {need:.0f} per second. Ask the hardware team to notify every IMU sample "
+                "(20-50 per second); a counter in the line (;N:123, +1 per notify) shows whether the firmware or the radio is slow")
+
+
 class BleakTransport(Transport):
     """Real robot over BLE (bleak). Own asyncio loop on a thread; reconnects forever."""
 
@@ -205,7 +229,8 @@ class Bridge:
 
     # ---- IMU in
     def _on_line(self, data):
-        imu_store.push(data, fields=B["IMU_FIELDS"], units=B["GYRO_UNITS"])
+        for s in lines_of(data):
+            imu_store.push(s, fields=B["IMU_FIELDS"], units=B["GYRO_UNITS"])
 
     def _zero_gyro(self, t, gz_raw):
         """A MEMS gyro at rest does not read zero (bench: gz -0.36 deg/s, gx -2.2, steady to 0.06): integrated, that is 20
@@ -333,18 +358,18 @@ def main():
                     help="real = the room camera's person (run  python -m laptop.vision.mono --auto-calib --port 5017  as well)")
     ap.add_argument("--psi0", type=float, default=0.8); ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--ideal", action="store_true", help="with --fake: perfect sensors, no wind")
-    ap.add_argument("--no-tof", action="store_true", help="with --fake: no ultrasonic in the IMU line (default: on, like the real gondola)")
+    ap.add_argument("--tof", action="store_true", help="with --fake: an ultrasonic in the IMU line (default: none, like the 2026-09-19 box)")
     ap.add_argument("--no-fpv", action="store_true", help="with --fake --sim: no eye on the balloon in the 5007 state (default: on)")
     ap.add_argument("--no-vision", action="store_true", help="with --fake --sim: no room camera (no balloon / person fixes on 5007): eye + ultrasonic only")
     ap.add_argument("--plot", action="store_true", help="with --fake: live top-down plot of the simulated world (matplotlib)")
-    ap.add_argument("--probe", action="store_true", help="print raw IMU lines for 10 s and exit")
+    ap.add_argument("--probe", action="store_true", help="print raw IMU lines for 10 s, then the rate verdict, and exit")
     ap.add_argument("--motor", nargs=2, metavar=("LETTER", "PCT"), help="bench: run one motor for 2 s, then STOP")
     ap.add_argument("--no-http", action="store_true"); ap.add_argument("--imu-log", action="store_true", help="append samples to data/imu.jsonl")
     args = ap.parse_args()
 
     if args.fake:
         from ..sim.world import IDEAL, REAL, World
-        world = World(dict(IDEAL if args.ideal else REAL, tof=not args.no_tof, fpv=not args.no_fpv, vision=not args.no_vision),
+        world = World(dict(IDEAL if args.ideal else REAL, tof=args.tof, fpv=not args.no_fpv, vision=not args.no_vision),
                       person=args.person, psi0=args.psi0, seed=args.seed, epoch=time.monotonic())
         tr = SimTransport(world, publish_state=args.sim, imu_units=B["GYRO_UNITS"])
     else:
@@ -352,7 +377,12 @@ def main():
     if args.imu_log: imu_store.start_log("data/imu.jsonl")
 
     if args.probe or args.motor:
-        tr.on_line = lambda data: print(f"[imu] {bytes(data).decode('utf-8', 'replace').strip()!r} -> {imu_store.push(data, fields=B['IMU_FIELDS'], units=B['GYRO_UNITS'])}")
+        got = []                                                   # (arrival time, sample or None), for the rate verdict
+        def on_line(data):
+            for s in lines_of(data):
+                d = imu_store.push(s, fields=B["IMU_FIELDS"], units=B["GYRO_UNITS"]); got.append((time.monotonic(), d))
+                print(f"[imu] {s!r} -> {d}")
+        tr.on_line = on_line
         tr.start(); t0 = time.monotonic()
         while not tr.connected and time.monotonic() - t0 < 30: time.sleep(0.1)
         if not tr.connected: raise SystemExit("[ble] could not connect")
@@ -365,7 +395,7 @@ def main():
                 while not tr.send("STOP") and time.monotonic() - t1 < 15: time.sleep(0.2)   # link dropped mid-run (seen on the bench): wait for the reconnect
                 time.sleep(0.5); print("[ble] STOP" if tr.connected else "[ble] STOP NOT DELIVERED: link is down, cut the motor power")
         else:
-            time.sleep(10.0)
+            del got[:]; time.sleep(10.0); print(probe_verdict(got, 10.0))
         tr.close(); time.sleep(0.5); return
 
     br = Bridge(tr, http_port=None if args.no_http else B["HTTP_PORT"])

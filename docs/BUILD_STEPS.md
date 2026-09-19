@@ -22,7 +22,6 @@ The design behind these steps (what the software assumes and why) is in `docs/RO
 **From the hardware team**
 - the finished breadboard: Bluetooth board, two motor drivers, IMU, four motors with leads, battery and its switch or connector
 - four props: two clockwise, two counter-clockwise (the 8520 kit has both; they are marked A/B or CW/CCW)
-- the ultrasonic sensor, only if their firmware already prints its reading
 
 **Frame**
 - a stiff 30 cm stick: a chopstick, a bamboo skewer pair taped together, or a carbon rod
@@ -45,7 +44,7 @@ The design behind these steps (what the software assumes and why) is in `docs/RO
 - helium: about 25 cubic feet for 1.10 m, so two disposable party tanks, or one cylinder
 
 **Laptop**
-- this repo, the virtual environment, Bluetooth on, the mat board (the four AprilTags on one rigid board)
+- this repo, plain `python` with the packages installed (README section 0), Bluetooth on, the mat board (the four AprilTags on one rigid board)
 
 ## The steps
 
@@ -96,7 +95,7 @@ The design behind these steps (what the software assumes and why) is in `docs/RO
 2. Ask: what battery is it (cells, voltage, mAh) and how is it charged?
 3. Ask: which motor driver chips (read the chip name off the driver boards: DRV8833, TB6612, MX1508, L298N...)?
 4. Ask: does the firmware stop the motors by itself when no command arrives for 500 ms?
-5. Ask: how many IMU lines per second does it send, and does it print the ultrasonic reading?
+5. Ask: how many IMU lines per second does it send over Bluetooth (notify calls, not IMU reads)? Is anything else in the line? (No ultrasonic on the 2026-09-19 box: it ran out of pins.)
 6. Write the five answers under a new heading `## The box (2026-09-19)` at the end of `calib/MEASUREMENTS.md`.
 
 **You should see**
@@ -119,12 +118,12 @@ The design behind these steps (what the software assumes and why) is in `docs/RO
 **You should see**
 - `[ble] scanning for 'BalloonRobot'...` then `[ble] connected to BalloonRobot at XX:XX:XX:XX:XX:XX`.
 - Then a stream of lines like `[imu] 'A:-0.16,-0.01,1.08;G:-2.1,2.0,-0.4;T:44.5' -> {'ax': -0.16, ... 'gz_rad': -0.007}` for 10 seconds, then it exits.
-- Several lines per second: at least 100 lines in the 10 seconds (the software wants 20 per second).
+- Then the last line, the verdict: `[probe] 487 lines in 10 s = 48.7 per second, gap median 20 ms max 45 ms: OK`. Any count of 200 or more says OK.
 
 **If not**
 - `not found`: is the box on? Is a phone or another laptop already connected to it (Bluetooth takes one connection)? Is Windows Bluetooth on? Move within 2 m and try again.
 - Lines print but end in `-> None`: the line format is not understood. Copy one raw line to the software side.
-- Fewer than 50 lines in 10 seconds: the IMU is sent too slowly. Ask the hardware team for 20 per second; the yaw loop runs open-loop below 5 per second.
+- The verdict says `SLOW` or `TOO SLOW` (2026-09-19: 10 lines in 10 s, one per second): the box notifies too rarely. The laptop prints every notification the moment it arrives, so the slow part is in the firmware or the radio. Give the hardware team the verdict line and ask for one notification per IMU sample at 20-50 per second. Quick test for them: add a counter `;N:123` (+1 per notify call) to the line. N counting 1, 2, 3 at the laptop = the firmware notifies once a second; N jumping by ~100 = the radio drops them, so notify every 20-50 ms, not every 10. Steps 5 to 9 can go ahead meanwhile; tick this step when the verdict says OK.
 
 #### Step 5. Check the IMU is the right way up and the right way round
 
@@ -263,7 +262,7 @@ The design behind these steps (what the software assumes and why) is in `docs/RO
 
 **Do**
 1. Peel the breadboard's adhesive backing if it has one; otherwise put four strips of foam tape under it.
-2. Press it onto the plate, centred on the centre dot, its long edges parallel to the plate's long edges. If the box has an ultrasonic sensor, put that end of the breadboard toward FRONT.
+2. Press it onto the plate, centred on the centre dot, its long edges parallel to the plate's long edges.
 3. Look at the IMU. It must be flat, parallel to the plate, chip facing up, and fixed. If it hangs on jumper wires, stick it to the top of the breadboard with a square of foam tape, chip up.
 
 **You should see**
@@ -355,21 +354,22 @@ The design behind these steps (what the software assumes and why) is in `docs/RO
 **If not**
 - The battery is a 9 V block or a 2S pack: same rules; note its weight later in step 26.
 
-#### Step 18. Fit the ultrasonic (only if the firmware prints its reading)
+#### Step 18. Check the underside (there is no ultrasonic on this box)
 
 **You need**
-- the ultrasonic sensor on its leads, foam tape
+- the gondola, turned over
 
 **Do**
-1. Skip this step if step 3 said the firmware does not print an `alt` value.
-2. Stick the sensor UNDER the plate at the FRONT edge on the centre line, the two round transducers pointing straight DOWN, at least 10 cm from the V motor.
-3. Tape its leads along the plate to the breadboard. Nothing may hang below the sensor.
+1. The box has no ultrasonic (it ran out of pins), so height will come from the room camera and there is nothing to fit here.
+2. Turn the gondola over. Under the plate there must be only: the battery (left half), the V standoff and motor (centre), and taped leads.
+3. Check that nothing under the plate reaches lower than the V prop will (the standoff height plus 2 cm): no connector, no battery corner, no loose tape.
 
 **You should see**
-- Sensor face pointing at the floor, 10 cm or more ahead of V.
+- A flat underside: battery, standoff, taped leads, nothing else, nothing lower than the V prop.
 
 **If not**
-- The firmware prints the reading in millimetres or metres instead of centimetres: change `ALT_UNITS="cm"` in `config.BLE` to `"mm"` or `"m"`.
+- Something hangs lower than the V prop: move it to the top side or tape it flat. It would be the first thing to touch the floor, and the V prop's air must be free (rule 3 in `docs/ROBOT_BUILD.md`).
+- An ultrasonic is added later: stick it under the front edge on the centre line looking straight down, 10 cm from V, have the firmware append ` alt=<cm>` to the IMU line, and set `ALT_UNITS` in `config.BLE` to the units it prints.
 
 #### Step 19. Route and tie down every wire
 
@@ -600,9 +600,9 @@ The design behind these steps (what the software assumes and why) is in `docs/RO
 
 **Do**
 1. Stand the balloon so the gondola rests on the floor and the balloon is upright (a helper steadies the top).
-2. Measure floor to the widest point of the balloon (the equator): E. Measure floor to the motor bar: M. If there is an ultrasonic, floor to its face: U.
-3. `ARM_BELOW` = E minus M. `TOF_BELOW` = E minus U. Measure the balloon's diameter D against the wall marks (or tape across the widest point, or circumference divided by 3.14).
-4. In `laptop/config.py` `PHYS = dict(...)`: set `D=`, `ARM_BELOW=`, `TOF_BELOW=` (metres). `M_GONDOLA` and `MOTOR_SPACING` are already there from step 26.
+2. Measure floor to the widest point of the balloon (the equator): E. Measure floor to the motor bar: M.
+3. `ARM_BELOW` = E minus M. Measure the balloon's diameter D against the wall marks (or tape across the widest point, or circumference divided by 3.14).
+4. In `laptop/config.py` `PHYS = dict(...)`: set `D=` and `ARM_BELOW=` (metres); leave `TOF_BELOW` alone (no ultrasonic on this box). `M_GONDOLA` and `MOTOR_SPACING` are already there from step 26.
 5. Log every number with today's date in `calib/MEASUREMENTS.md`.
 6. Run `python tools/scenarios.py --seeds 3` and `python tools/control_test.py`.
 

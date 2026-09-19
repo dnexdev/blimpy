@@ -50,12 +50,12 @@ stops.
 | Thrust per motor | ~50 gf (gram-force) at 100 %, ~12 gf at the 50 % cap, reverse gives ~60 % (MEASURE) | `PHYS["T_MAX"]`, `PHYS["REV_EFF"]`, `protocol.CAP` | the mixer never asks for more than 50 %; stronger motors are fine, the numbers go in PHYS |
 | Motor start | a motor must turn by **10 % duty** | `FOLLOW["DUTY_MIN"]`, `world.DUTY_START` | commands below 10 % are sent as 0. If a motor only starts at 20 %, tell the software side |
 | IMU | mounted **flat and rigid**, gyro Z axis **up**: turning the gondola counter-clockwise (seen from above) must give a **positive gz** | `BLE["GYRO_SIGN"]`, `imu_store.py`, `ble_gondola._on_imu` | wrong sign = the yaw loop fights itself and the balloon spins up. One config flag fixes it after the bench check |
-| IMU line | one text line per sample, **at least 20 per second**: `A:ax,ay,az;G:gx,gy,gz;T:44.5` (gyro in deg/s, as seen on the bench 2026-09-19) | `imu_store.parse`, `BLE["GYRO_UNITS"]`, `BLE["IMU_FRESH_MS"]` | slower than 5 per second = the mixer runs open loop (no yaw feedback) |
+| IMU line | one text line per sample, **at least 20 per second**: `A:ax,ay,az;G:gx,gy,gz;T:44.5` (gyro in deg/s, as seen on the bench 2026-09-19) | `imu_store.parse`, `BLE["GYRO_UNITS"]`, `BLE["IMU_FRESH_MS"]` | slower than 5 per second = the mixer runs open loop (no yaw feedback). Bench 2026-09-19: **one per second arrived**; being fixed (section 9, item 4) |
 | Gyro at rest | the bridge learns the resting offset while disarmed: **hold the gondola still for 3 s before arming** | `BLE["GYRO_ZERO*"]`, `ble_gondola._zero_gyro` | if it is moving when you arm, the heading drifts (bench: 20 deg a minute uncorrected) |
 | Motor letters | the firmware calls the motors **C D E F**; the software maps L R S V onto them | `BLE["MOTORS"]`, `BLE["SIGN"]` | set once on the bench with `ble_gondola --motor C 30` and friends (section 5, step 3) |
 | Command | `MOTORS c d e f`, percent -100..100, sign = direction; `STOP`; at most 20 lines a second | `ble_gondola.to_pct`, `BLE["HZ"]` | percent = duty x 100. Normal flight stays within +-50 |
 | Failsafe | no command for **500 ms**, or the Bluetooth link drops, or the laptop disarms: **every motor stops** | `protocol.FAILSAFE_MS`, the bridge | the bridge sends STOP. The FIRMWARE should also stop itself after 500 ms without a command (section 9) |
-| Optional ultrasonic | pointing **straight down**, its reading appended to the IMU line as ` alt=123.4` (cm) | `BLE["ALT_KEYS"]`, `BLE["ALT_UNITS"]`, `PHYS["TOF_BELOW"]`, `estimator.update_telem` | with it, height is held to ~2 cm; without it, height comes from the camera (~15 cm). Readings under 5 cm or over 2 m are ignored |
+| Ultrasonic | **none on this box** (it ran out of pins, 2026-09-19). The code takes one appended to the IMU line as ` alt=123.4` (cm) if it is ever added | `BLE["ALT_KEYS"]`, `BLE["ALT_UNITS"]`, `PHYS["TOF_BELOW"]`, `estimator.update_telem` | without it, height comes from the room camera (~15 cm), enough for a 1.7 m hover; with one, ~2 cm. `pilot --relative` (no room camera) needs it, so that mode is out |
 | Gondola weight | the model says **0.25 kg** (MEASURE) | `PHYS["M_GONDOLA"]` | heavier is fine as long as the balloon lifts it (section 4). Update the number |
 | Trim | about **1 gram heavy** with the motors off | `world.FREE_LIFT_N` (-0.010 N) | a dead balloon sinks to the floor instead of the ceiling; V mostly pushes up, its efficient direction |
 | Cruise height | balloon centre at **1.7 m**; allowed 0.9-2.4 m | `FOLLOW["Z_HOLD"]`, `AVOID["Z_MIN"/"Z_MAX"]` | the top of the balloon is at 2.25 m: the room needs a **ceiling of 2.5 m or more** and no vents above the demo area |
@@ -86,7 +86,7 @@ under the middle. Battery under the middle, opposite S. Forward is the direction
                           FORWARD (+x)
                                ^
                                |
-                 [ultrasonic, optional: front edge, looks DOWN]
+                 [front edge: nothing under it (no ultrasonic on this box)]
         +-----------------------------------------------+
         |   breadboard                                  |
         |   Bluetooth board   driver 1   driver 2       |     S motor: on the RIGHT edge, in line with the
@@ -122,15 +122,16 @@ under the middle. Battery under the middle, opposite S. Forward is the direction
 2. **S goes through the middle.** Its thrust line must pass through the board's centre when seen from above (it may be
    at the edge of the board, that is a sideways offset and does not matter; a forward/back offset does).
 3. **V under the middle, prop clear.** At least 2 cm of free air above and below the prop, nothing under it (no
-   wires, no battery, no ultrasonic).
+   wires, no battery).
 4. **IMU flat, chip facing up, glued or screwed to the board, not dangling on wires.** Its printed X arrow forward
    is nice but not required; only the gyro Z axis matters, and one config flag fixes its sign.
 5. **Nothing within 3 cm of a prop disc**: strings, wires, the balloon skin, your fingers. Route the bridle strings
    to the rear bar 3 cm inboard of the motors and in front of the prop plane.
 6. **Every motor on soft foam tape**, wires tied down with tape or zip ties. Vibration is the noise, and the IMU reads
    vibration as motion.
-7. **Ultrasonic (if used) at the front edge, looking straight down**, 10 cm or more from the V prop so the prop is not
-   in its 15-degree cone. Nothing may hang below it.
+7. **Nothing else under the plate.** There is no ultrasonic on this box (it ran out of pins): the underside carries
+   only the battery, the V standoff and taped leads, and nothing reaches lower than the V prop. If an ultrasonic is
+   ever added: front edge, looking straight down, 10 cm or more from the V prop so the prop is not in its cone.
 8. **Battery on the left half, under the board**, so the S motor on the right is balanced: the board must hang
    level from the ring. Move the battery until it does.
 9. **Balance point under the ring.** Hang the finished gondola from a finger through the bridle ring: level in both
@@ -159,7 +160,6 @@ after its own 50 g skin. Inflated full (1.22 m): **880 g** / **735 g**.
 | battery: 1S LiPo 1800 mAh / 9 V block / 2S 1000 mAh | 35 / 45 / 55 | |
 | wires, headers, switch | 15-25 | breadboard jumpers add up |
 | frame, foam tape, glue, bridle, clip | 30-50 | |
-| ultrasonic (optional) | 9 | |
 | ballast to trim | 0-40 | coins at the centre |
 | **total** | **150-330** | |
 
@@ -216,9 +216,9 @@ the README has the same bench checklist with more detail.
     skin. If not, lengthen the bridle strings a little (and measure again in step 12).
 11. **Trim.** Motors off. Add coins or blu-tack at the gondola centre until, released at chest height, it takes
     5-10 s to reach the floor. That is about 1 g heavy. It will feel too heavy; it is not.
-12. **Measure the hang**: tape from the floor to the balloon's equator and from the floor to the motor plane (and to
-    the ultrasonic lens, if fitted). `ARM_BELOW` = equator height minus motor-plane height. `TOF_BELOW` = equator
-    height minus lens height. Balloon diameter into `D`. All into `PHYS` and `calib/MEASUREMENTS.md`.
+12. **Measure the hang**: tape from the floor to the balloon's equator and from the floor to the motor plane.
+    `ARM_BELOW` = equator height minus motor-plane height. Balloon diameter into `D`. All into `PHYS` and
+    `calib/MEASUREMENTS.md` (`TOF_BELOW` stays as it is: no ultrasonic on this box).
 13. **Rerun the simulator suite** with the measured numbers, so the controller has been tested with the real vehicle:
     ```powershell
     python tools/scenarios.py --seeds 3
@@ -266,11 +266,9 @@ the README has the same bench checklist with more detail.
 | gondola weight with battery and ballast | `PHYS["M_GONDOLA"]` | sim tilt, estimator prediction |
 | L to R axis spacing | `PHYS["MOTOR_SPACING"]` | sim yaw authority |
 | equator to motor plane | `PHYS["ARM_BELOW"]` | sim tilt |
-| equator to ultrasonic lens | `PHYS["TOF_BELOW"]` | height = alt + TOF_BELOW (estimator) |
 | grams at 50 % duty, forward and reverse | `PHYS["T_MAX"]`, `PHYS["REV_EFF"]` | estimator, sim, braking |
 | which letter is which motor, and its sign | `BLE["MOTORS"]`, `BLE["SIGN"]` | the bridge |
 | gyro sign | `BLE["GYRO_SIGN"]` | the bridge |
-| ultrasonic units as printed | `BLE["ALT_UNITS"]` | the bridge |
 | walls, table, judges spot | `venues/default.json` | avoidance, go-to |
 
 Every measured value also gets a dated row in `calib/MEASUREMENTS.md` so it is never lost. After changing PHYS run
@@ -297,8 +295,12 @@ Every measured value also gets a dated row in `calib/MEASUREMENTS.md` so it is n
    motors must be rated for it, or swap the driver.
 3. **Percent to PWM**: percent 30 should mean 30 % duty. If the firmware maps it differently (a minimum, a curve),
    tell the software side; `DUTY_MIN` and `T_MAX` will be adjusted.
-4. **IMU line rate and format**: keep `A:...;G:...;T:...` at 20+ per second; gyro in deg/s. If the ultrasonic is
-   fitted, append ` alt=87.3` (cm, -1 when no echo) to the same line.
+4. **IMU line rate**: 20 or more notifications per second of `A:...;G:...;T:...` (gyro in deg/s). Bench 2026-09-19:
+   one per second arrived. The laptop prints every notification the moment it comes in (bleak callback, no timer), so
+   the slow part is between the IMU read and the radio. Quick test: add a counter to the line (`;N:123`, +1 per
+   notify() call). N counting 1, 2, 3 at the laptop = the firmware notifies once a second; N jumping by ~100 = the
+   radio drops them, so notify every 20-50 ms instead of every 10. `ble_gondola --probe` ends with a
+   `[probe] N lines in 10 s = X per second` verdict: OK at 20+.
 5. **One battery, one ground, one switch**: motors and the Bluetooth board from the same battery, a bulk capacitor
    (470-1000 uF) across the battery so four motors starting at once do not reset the board, and a physical switch
    the person next to the balloon can reach.
