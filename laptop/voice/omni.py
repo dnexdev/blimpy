@@ -277,6 +277,9 @@ class OmniLive:
                 self.stats["local_stops"] = self.stats.get("local_stops", 0) + 1
                 try: self.on_intent({"intent": "hover"})
                 except Exception as e: self.last_error = f"local stop: {e}"
+                if self.spk: self.spk.flush()
+                if self._resp_active: self.send({"type": "response.cancel"})   # seen live: it would resume its story otherwise
+                self.say("you stopped and are holding position now (one short sentence, no tool call)")
         elif t == "response.created":
             self._t_resp = time.monotonic(); self.t_first_audio = 0.0; self._resp_active = True
         elif t == "response.done":
