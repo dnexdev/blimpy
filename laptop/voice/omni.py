@@ -113,6 +113,40 @@ def pick_device(spec, kind):
     return min(hits, key=lambda h: rank.get(apis[h[1]["hostapi"]]["name"], 3))[0]
 
 
+def bt_keepalive(mic_device):
+    """A Bluetooth headset's microphone lives on its hands-free (HFP) link, and Windows tears that link down a moment
+    after nothing is PLAYED to the headset, then brings it back when the capture asks again: the mic arrives in 2-3 s
+    bursts with gaps (measured with AirPods Pro, laptop speakers as the output: 44 of 200 packets in 8 s; with this
+    keep-alive 199 of 200). So: keep a stream of silence open to the headset's own hands-free speaker endpoint (WDM-KS
+    exposes it, 16 kHz mono) for as long as the mic is open. Returns the stream, or None (not a Bluetooth headset mic,
+    or no such endpoint)."""
+    if mic_device is None: return None
+    import sounddevice as sd
+    try:
+        name = sd.query_devices(mic_device, "input")["name"]
+    except Exception:
+        return None
+    if "headset" not in name.lower() and "hands-free" not in name.lower(): return None
+    words = [w for w in re.findall(r"[A-Za-z]{4,}", name.split("(", 1)[-1]) if w.lower() not in ("headset", "hands", "free", "find")]
+    key = (words[0] if words else name).lower()
+    apis = sd.query_hostapis()
+    for i, d in enumerate(sd.query_devices()):
+        n = d["name"].lower()
+        if d["max_output_channels"] > 0 and "hands-free" in n and key in n and apis[d["hostapi"]]["name"] == "Windows WDM-KS":
+            try:
+                rate = int(d["default_samplerate"]) or 16000
+                s = sd.RawOutputStream(samplerate=rate, channels=1, dtype="int16", device=i, blocksize=int(rate * 0.04),
+                                       callback=lambda o, f, t, st: o.__setitem__(slice(None), b"\x00" * len(o)))
+                s.start()
+                print(f"[omni] Bluetooth headset mic: keeping its hands-free link up (silence to output {i} at {rate} Hz)")
+                return s
+            except Exception as e:
+                print(f"[omni] could not open the headset's hands-free speaker endpoint {i} for the keep-alive: {e}")
+                return None
+    print(f"[omni] {name[:40]!r} looks like a Bluetooth headset mic but no hands-free speaker endpoint was found: expect dropouts unless --spk is the headset too")
+    return None
+
+
 def open_mic(callback, device=None, rate=IN_RATE, block=MIC_BLOCK):
     """Start a 16 kHz mono int16 capture that calls callback(pcm_bytes) per 40 ms. If the device refuses 16 kHz (Bluetooth
     headsets under WDM-KS), capture at its own rate and resample down here."""
@@ -352,7 +386,7 @@ class OmniLive:
     (that string is the tool result the model reads before it speaks). Keep it under ~1 s."""
 
     def __init__(self, on_intent, frame_fn=None, api_key=None, model=None, url=None, session=None, fps=1.0,
-                 mic=True, speaker=True, mic_device=None, spk_device=None, half_duplex=True, purpose="demo",
+                 mic=True, speaker=True, mic_device=None, spk_device=None, half_duplex=True, purpose="demo", bt_keepalive=True,
                  usage_log=True, debug=False, on_text=None, gate=True, name_gate=True, presence_fn=None, record=False):
         self.on_intent, self.frame_fn, self.fps = on_intent, frame_fn, fps
         self.gate = gate if isinstance(gate, MicGate) else (MicGate(**gate) if isinstance(gate, dict) else (MicGate() if gate else None))
@@ -383,6 +417,7 @@ class OmniLive:
         self.session = dict(SESSION, **(session or {}))
         self.use_mic, self.use_spk = mic, speaker
         self.mic_device, self.spk_device = pick_device(mic_device, "input"), pick_device(spk_device, "output")
+        self.bt_keepalive, self.keepalive = bt_keepalive, None
         self.half_duplex = half_duplex      # laptop speakers + laptop mic: drop mic packets while Blimpy talks (no AEC)
         self.purpose, self.debug, self.on_text = purpose, debug, on_text
         self.usage_log, self.usage_path = bool(usage_log), (usage_log if isinstance(usage_log, str) else None)   # True = data/omni_usage.jsonl
@@ -425,6 +460,7 @@ class OmniLive:
         self.stopping = True
         try:
             if self.mic_stream: self.mic_stream.stop(); self.mic_stream.close()
+            if getattr(self, "keepalive", None): self.keepalive.stop(); self.keepalive.close()
         except Exception: pass
         try:
             if self.ws: self.ws.close()
@@ -816,7 +852,7 @@ class OmniLive:
         for p in packets: self._send_audio(p)
 
     def _start_mic(self):
-        import sounddevice as sd
+        self.keepalive = bt_keepalive(self.mic_device) if self.bt_keepalive else None
         self.mic_stream = open_mic(self.feed_audio, self.mic_device)
 
     def send_frame(self, frame):
@@ -872,6 +908,7 @@ if __name__ == "__main__":
     ap.add_argument("--seconds", type=float, default=120); ap.add_argument("--debug", action="store_true")
     ap.add_argument("--full-duplex", action="store_true", help="headphones: keep the mic open while Blimpy talks (barge-in)")
     ap.add_argument("--no-gate", action="store_true", help="stream the mic continuously (costs ~0.77 units per minute)")
+    ap.add_argument("--no-keepalive", action="store_true", help="do not hold a Bluetooth headset's hands-free link open with silence (see bt_keepalive)")
     ap.add_argument("--meter", action="store_true", help="no cloud: show the mic level, the noise floor and when the gate would open")
     ap.add_argument("--listen", type=float, default=5.0, help="seconds the gate listens to the room before it opens (sets the noise floor)")
     ap.add_argument("--mic", default=None, help="input device: index or name fragment (AirPods, Headset); python -m sounddevice lists them")
@@ -906,6 +943,7 @@ if __name__ == "__main__":
         import sounddevice as sd
         g = MicGate(warmup_s=a.listen, on_ready=lambda g: print(f"\n[meter] {g.verdict()}"))
         dev = pick_device(a.mic, "input"); print(f"[meter] mic: {sd.query_devices(dev, 'input')['name'][:60]}")
+        ka = bt_keepalive(dev) if not a.no_keepalive else None
         s = open_mic(g.process, dev)
         print("[meter] talk normally, then stay quiet; the gate should be OPEN only while you talk (Ctrl+C to quit)")
         try:
@@ -914,7 +952,9 @@ if __name__ == "__main__":
                 print(f"[meter] {g.level:6.1f} dBFS floor {g.floor if g.floor is not None else -100:6.1f} opens at {g.threshold:6.1f}  "
                       f"{'OPEN ' if g.open else 'shut '} sent {g.sent_s:5.1f}/{g.total_s:5.1f}s {bar:30s}", end="\r", flush=True)
         except KeyboardInterrupt: print()
-        s.stop(); s.close(); sys.exit(0)
+        s.stop(); s.close()
+        if ka: ka.stop(); ka.close()
+        sys.exit(0)
     cam = None
     if not a.no_cam and a.cam != "none":
         from ..vision.streams import Stream

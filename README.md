@@ -342,6 +342,11 @@ A hackathon hall will talk to Blimpy all day. In order of payoff:
    `stats["local_intents"]`; same idea as the stop-word net.
 4. **Press-to-talk**: DONE (`p` in the pilot: the mic goes up in full for ONE command, past the gate and past mute, until
    you stop talking). Stage mode: `m` once, then `p` before each command. `--mic AirPods --spk Speakers` puts the mic at
+   your ear and the voice on the laptop speakers. Bluetooth catch (measured 2026-09-19 with AirPods Pro): Windows drops
+   the headset's hands-free link a moment after nothing is PLAYED to it, so the mic arrived in 2-3 s bursts (44 of 200
+   packets in 8 s). `bt_keepalive` in omni.py now holds a stream of silence open to the headset's hands-free speaker
+   endpoint whenever the mic is a Bluetooth headset (199 of 200 packets): automatic in the pilot, `--meter` and the CLI
+   (`--no-keepalive` turns it off). The pilot prints "keeping its hands-free link up" at start when it is active.
    your ear and the voice on the laptop speakers; keep HALF_DUPLEX on.
 A wake word (openWakeWord) is possible but needs a trained "blimpy" model; not worth it before the above.
 
