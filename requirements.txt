@@ -1,0 +1,21 @@
+# Laptop side. Python 3.10+.  Install torch FIRST with a CUDA build (RTX 5080 = Blackwell -> needs cu128+):
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+# then:  pip install -r requirements.txt
+# If pip tries to replace the cu128 torch with a CPU one (and dies on Windows long paths), install
+# ultralytics with --no-deps, then: pip install --no-deps torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cu128
+numpy
+opencv-contrib-python>=4.8
+ultralytics>=8.3
+pillow
+matplotlib
+# voice layer (laptop/voice): local LLM via Ollama (install app + `ollama pull qwen2.5:7b`), whisper STT, offline TTS
+ollama
+faster-whisper
+sounddevice
+pyttsx3
+# OMNI Live track (laptop/voice/omni.py, omni_watch.py): Qwen3.5-Omni over the yibuapi relay. websockets = offline mock server only
+websocket-client
+requests
+websockets
+# firmware build without VS Code:  cd firmware && pio run   (flash: pio run -t upload -t monitor)
+platformio

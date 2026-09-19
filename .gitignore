@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.venv/
+firmware/.pio/
+firmware/include/secrets.h
+runs/
+datasets/
+data/
+models/*.pt
+*.pt
+targets/*.png
+sim_out/
+.DS_Store
+calib/*.npz
+# per-venue mat survey (tools/calib/survey_mat.py); re-survey at each site
+calib/mat.json

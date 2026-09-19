@@ -1,0 +1,18 @@
+{
+  "name": "htn_demo_room",
+  "version": 1,
+  "units": "m",
+  "origin": "PROTOCOL.md s5: floor AprilTag centre; +X tag left->right, +Y tag bottom->top, +Z up",
+  "arena": {
+    "min": [-2.0, -2.0],
+    "max": [4.5, 2.0]
+  },
+  "obstacles": [
+    {"name": "judges_table", "x": 4.0, "y": 0.0, "r": 0.45}
+  ],
+  "places": {
+    "judges": [2.5, 0.0]
+  },
+  "wander": null,
+  "notes": "PLACEHOLDERS: tape-measure on site, or  python -m laptop.positioning.capture_place <name> --xy X Y"
+}
