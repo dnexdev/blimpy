@@ -174,8 +174,10 @@ Write the weight into `PHYS["M_GONDOLA"]` (kg) and `calib/MEASUREMENTS.md`.
 
 ## 5. Build order (bench first, balloon last)
 
-The full procedure, one step at a time with what you should see after each, is `docs/BUILD_STEPS.md` (38 steps).
-This is the summary. Each step is a go / no-go for the next. Commands run from the repo root on the laptop with Bluetooth on. Section 3 of
+The full procedure, one step at a time with what you should see after each, is `docs/BUILD_STEPS.md` (36 steps in
+three phases: H = the hardware team's motor box, S = everything the software people do meanwhile with no motors, J = the
+join). Since 2026-09-19 late the box is two ESP32-C3 boards and two TB6612 drivers (`firmware/i2c_motor_slave/`).
+This is the summary, in the old single-track order. Each step is a go / no-go for the next. Commands run from the repo root on the laptop with Bluetooth on. Section 3 of
 the README has the same bench checklist with more detail.
 
 1. **The box talks before anything is built around it.** Power the breadboard. On the laptop:

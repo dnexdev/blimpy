@@ -391,7 +391,9 @@ def main():
             letter, pct = args.motor[0].upper(), int(args.motor[1])
             try:
                 secs = max(0.2, min(30.0, args.secs))          # capped: the firmware has no timeout of its own yet
-                print(f"[ble] {letter} {pct} for {secs:g} s"); tr.send(f"{letter} {pct}"); time.sleep(secs)
+                print(f"[ble] {letter} {pct} for {secs:g} s"); t2 = time.monotonic()
+                while time.monotonic() - t2 < secs:                 # resent every 200 ms: a firmware command timeout (500 ms) must not cut the test short
+                    tr.send(f"{letter} {pct}"); time.sleep(0.2)
             finally:                                           # Ctrl+C included; and wait for the write: the BLE thread is a daemon,
                 t1 = time.monotonic()                          # leaving at once could exit before STOP is on the air
                 while not tr.send("STOP") and time.monotonic() - t1 < 15: time.sleep(0.2)   # link dropped mid-run (seen on the bench): wait for the reconnect
