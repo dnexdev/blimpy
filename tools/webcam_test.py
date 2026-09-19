@@ -11,7 +11,7 @@ import argparse, os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import cv2
 from laptop import config
-from laptop.vision.streams import Stream
+from laptop.vision.streams import Stream, label
 from laptop.vision.detect import PersonTracker, BalloonDetector
 
 
@@ -48,15 +48,12 @@ def main():
                     x1, y1, x2, y2 = map(int, p["box"])
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                     cv2.circle(frame, tuple(map(int, p["pt"])), 5, (0, 255, 0), -1)
-                    cv2.putText(frame, f"person {p['id']} {p['conf']:.2f}", (x1, max(15, y1 - 6)),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                    label(frame, f"person {p['id']} {p['conf']:.2f}", (x1, max(18, y1 - 6)), 0.6, (0, 255, 0))
                 if b:
                     x1, y1, x2, y2 = map(int, b["box"])
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 255), 2)
-                    cv2.putText(frame, f"balloon {b['conf']:.2f}", (x1, max(15, y1 - 6)),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
-                cv2.putText(frame, f"{cam.fps:.0f} fps  {infer_ms:.0f} ms", (10, 25),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                    label(frame, f"balloon {b['conf']:.2f}", (x1, max(18, y1 - 6)), 0.6, (255, 0, 255))
+                label(frame, f"{cam.fps:.0f} fps  {infer_ms:.0f} ms", (10, 25))
                 cv2.imshow("blimpy vision test (q quits)", frame)
                 if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
                     break

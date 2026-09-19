@@ -114,8 +114,9 @@ if __name__ == "__main__":
                     for p in eye.last_people:
                         x1, y1, x2, y2 = map(int, p["box"]); cv2.rectangle(fr, (x1, y1), (x2, y2), (0, 200, 0), 2)
                     if obs:
-                        cv2.putText(fr, f"{math.degrees(obs['bearing']):+.0f} deg  {obs['range'] and '%.1f m' % obs['range'] or 'close'}",
-                                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+                        from .streams import label
+                        label(fr, f"{math.degrees(obs['bearing']):+.0f} deg  {obs['range'] and '%.1f m' % obs['range'] or 'close'}",
+                              (10, 30), 0.8, (0, 255, 255))
                     cv2.line(fr, (w // 2, 0), (w // 2, h), (255, 255, 255), 1)
                     cv2.imshow("eye", fr)
                     if cv2.waitKey(1) & 0xFF == ord("q"): break

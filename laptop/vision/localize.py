@@ -20,7 +20,7 @@ from .. import config
 from ..control.protocol import STATE_PORT, UdpJson, now_ms
 from . import floor
 from .calib_io import Camera, make_tag_detector
-from .streams import Stream
+from .streams import Stream, label
 from .triangulate import triangulate
 
 STALE_MS = 500          # a frame older than this -> the camera is considered lost
@@ -45,17 +45,17 @@ def person_point(a, b):
     return a["pt"], b["pt"], PERSON_Z_M, lambda z: z
 
 
-def draw(frame, persons, balloon, label):
+def draw(frame, persons, balloon, text):
     for p in persons[:1]:
         x1, y1, x2, y2 = map(int, p["box"])
         cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
         cv2.circle(frame, tuple(map(int, p["pt"])), 6, (0, 255, 0), -1)
-        cv2.putText(frame, f"person id={p['id']}", (x1, y1 - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        label(frame, f"person id={p['id']}", (x1, max(18, y1 - 6)), 0.6, (0, 255, 0))
     if balloon:
         x1, y1, x2, y2 = map(int, balloon["box"])
         cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 128, 0), 2)
         cv2.circle(frame, tuple(map(int, balloon["pt"])), 6, (255, 128, 0), -1)
-    cv2.putText(frame, label, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+    label(frame, text, (10, 25))
 
 
 def tag_drift_px(cam, frame, det, obj, tag_id=0):

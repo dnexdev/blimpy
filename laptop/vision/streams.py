@@ -16,6 +16,18 @@ import os, threading, time
 import cv2
 from ..control.protocol import now_ms
 
+
+def label(frame, text, org, scale=0.7, color=(255, 255, 255), thickness=2, pad=4):
+    """putText that stays readable in any light: the text sits on a dark translucent box. org = bottom-left, like cv2."""
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    (w, h), base = cv2.getTextSize(text, font, scale, thickness)
+    x, y = int(org[0]), int(org[1])
+    x1, y1, x2, y2 = max(x - pad, 0), max(y - h - pad, 0), min(x + w + pad, frame.shape[1]), min(y + base + pad, frame.shape[0])
+    if x2 > x1 and y2 > y1:
+        roi = frame[y1:y2, x1:x2]
+        roi[:] = (roi * 0.25).astype(roi.dtype)          # darken the box, keep a hint of the picture
+    cv2.putText(frame, text, (x, y), font, scale, color, thickness, cv2.LINE_AA)
+
 LOW_LATENCY = "fflags;nobuffer|flags;low_delay|probesize;32|analyzeduration;0|fifo_size;1000000|overrun_nonfatal;1"
 VIDEO_EXT = (".mp4", ".mkv", ".avi", ".mov")
 RECONNECT_AFTER = 100   # consecutive failed reads (~1 s) before reopening a live source

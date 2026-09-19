@@ -16,7 +16,7 @@ import cv2, numpy as np
 import _bootstrap  # noqa: F401
 from laptop import config
 from laptop.vision.calib_io import Camera, save_intrinsics
-from laptop.vision.streams import Stream
+from laptop.vision.streams import Stream, label
 
 
 def main():
@@ -65,8 +65,8 @@ def main():
                 print(f"  shot {len(obj_pts)}/{args.shots}")
         if flash:
             frame[:] = 255; flash -= 1
-        cv2.putText(frame, f"{args.name}: shots {len(obj_pts)}/{args.shots}  {'BOARD OK' if found else 'move board into view / hold still'}  "
-                    f"[space]=shot [c]=calibrate [q]=quit", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        label(frame, f"{args.name}: shots {len(obj_pts)}/{args.shots}  {'BOARD OK' if found else 'move board into view / hold still'}  "
+              f"[space]=shot [c]=calibrate [q]=quit", (10, 30), 0.7, (0, 255, 255))
         cv2.imshow(f"intrinsics {args.name}", frame)
         if key == ord("q"):
             print("aborted"); break

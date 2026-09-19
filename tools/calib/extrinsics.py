@@ -15,7 +15,7 @@ import _bootstrap  # noqa: F401
 from laptop import config
 from laptop.vision import floor
 from laptop.vision.calib_io import Camera, make_tag_detector
-from laptop.vision.streams import Stream
+from laptop.vision.streams import Stream, label
 
 
 def main():
@@ -59,7 +59,7 @@ def main():
             for c in corners:
                 cv2.aruco.drawDetectedMarkers(frame, [c.reshape(1, 4, 2)])
             msg = f"{len(ids)} mat tag(s) {ids}: sampling..." if ids else "no mat tag seen"
-            cv2.putText(frame, f"{args.name}: {msg}   [q]=quit", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+            label(frame, f"{args.name}: {msg}   [q]=quit", (10, 30), 0.7, (0, 255, 255))
             cv2.imshow(f"extrinsics {args.name}", frame)
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 print("aborted"); break
