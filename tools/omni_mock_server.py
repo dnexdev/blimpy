@@ -4,7 +4,7 @@
 
 Speaks the OpenAI-style realtime event vocabulary as the real relay does (checked live with the sponsored key):
 session.created/updated, server VAD (speech_started after ~1 s of mic packets, speech_stopped + committed +
-input_audio_transcription.completed 0.4 s later), scripted turns (a set_intent tool call or an audio reply),
+input_audio_transcription.completed 0.4 s later), scripted turns (a set_intent tool call or an audio reply, optionally "heard": the transcript sent for that turn),
 function_call_output + response.create -> audio reply, response.done with usage (null when cancelled by barge-in), and
 the relay's rule that an image is refused until audio has been appended. Not a model: every turn comes from `script`.
 """
@@ -89,8 +89,9 @@ class Mock:
                         await ws.send(json.dumps({"type": "input_audio_buffer.speech_stopped", "item_id": iid, "audio_end_ms": 1400}))
                         await ws.send(json.dumps({"type": "input_audio_buffer.committed", "item_id": iid}))
                         self.stats["audio_since_commit"] = 0
+                        heard = (self.script[0].get("heard") if self.script else None) or "mock transcript"
                         await ws.send(json.dumps({"type": "conversation.item.input_audio_transcription.completed", "item_id": iid,
-                                                  "transcript": "mock transcript", "language": "en", "emotion": "neutral"}))
+                                                  "transcript": heard, "language": "en", "emotion": "neutral"}))
                         await next_turn()
                 elif t == "input_image_buffer.append":
                     if not self.stats.get("audio_since_commit"):    # the real relay: "Error append image before append audio"

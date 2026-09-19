@@ -6,7 +6,7 @@ Checks: session.update carries the set_intent tool; frames are held back until t
 them before audio), then mic packets and frames reach the server; a tool call reaches
 on_intent and its result goes back as function_call_output + response.create; the reply audio reaches the speaker;
 say() injects an [EVENT] turn; barge-in flushes playback; half-duplex drops mic packets while Blimpy talks; usage rows
-land in the ledger; the client reconnects after the server drops it.
+land in the ledger; the client reconnects after the server drops it; a spoken "stop" hovers from the transcription alone.
 """
 import json, os, pathlib, sys, tempfile, time
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -47,7 +47,8 @@ def check(name, ok, detail=""):
 
 
 mock = Mock(script=[{"tool": {"intent": "rotate", "degrees": -90, "target": None}},
-                    {"text": "long story", "audio_chunks": 40, "chunk_ms": 100}])
+                    {"text": "long story", "audio_chunks": 40, "chunk_ms": 100},
+                    {"heard": "Blimpy, stop.", "text": "Mm-hm.", "audio_chunks": 2}])
 th, stop = mock.serve_in_thread(PORT)
 intents = []
 spk = FakeSpeaker()
@@ -120,6 +121,11 @@ check("no frame ever refused (frames wait for audio after each commit)", mock.st
 om.send({"type": "mock.close"})
 check("reconnects after drop", wait_for(lambda: mock.stats["sessions"] >= 2 and om.ok, 8),
       f"sessions {mock.stats['sessions']} ok={om.ok} err={om.last_error}")
+
+# 9. a spoken "stop" acts locally from the transcription even when the model only says "Mm-hm."
+n_int = len(intents); talk(om, 40)
+check("spoken stop -> hover from the transcription (model said only Mm-hm.)",
+      wait_for(lambda: len(intents) > n_int, 3) and intents[-1] == {"intent": "hover"} and om.stats.get("local_stops") == 1, str(intents[n_int:]))
 
 om.stop(); stop()
 n_fail = sum(not v for v in results.values())

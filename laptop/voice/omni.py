@@ -17,7 +17,7 @@ response.function_call_arguments.done AND response.output_item.done (same call_i
 conversation.item.input_audio_transcription.completed, usage is in response.done (null when a reply was cut off by
 barge-in), and an image is refused until audio has been appended in the session.
 """
-import base64, json, os, queue, sys, threading, time, uuid
+import base64, json, os, queue, re, sys, threading, time, uuid
 from collections import deque
 
 MODEL = os.environ.get("OMNI_MODEL", "qwen3.5-omni-plus-realtime")
@@ -63,9 +63,16 @@ Rules:
 - Questions and small talk: answer briefly (max 2 sentences), in character, warm, a little playful. No emojis.
 - Messages starting with [EVENT] come from your own sensors and timers, not from the user: say them to the user in
   your own words, briefly. Never call a tool for an [EVENT].
-- If speech is clearly not addressed to you (people talking to each other, noise), say nothing useful: reply with a
-  single short "Mm-hm." at most.
+- If the user interrupts you mid-sentence, what they said is for you: act on it (a command -> set_intent, a question
+  -> answer). "Stop", "hold", "hover", "halt" always mean set_intent hover, also right after an interruption.
+- If speech is clearly not addressed to you (people talking to each other, noise), reply with a single short "Mm-hm."
+  at most. Anything that starts with "Blimpy" IS addressed to you.
 - Never invent robot abilities you were not given. You cannot pick things up or leave the room."""
+
+# Safety net, independent of the model: a spoken stop acts the moment its transcription arrives (seen live: after a
+# barge-in the model once answered "Blimpy, stop and hover." with "Mm-hm." and no tool call). Anchored to the start of
+# the utterance so "don't stop" and "stop following me" do the right thing.
+STOP_RE = re.compile(r"^\W*(?:(?:hey|ok|okay|please)\W+)?(?:blimpy\W+)?(?:please\W+)?(?:stop|halt|freeze|hold still|hover)\b", re.I)
 
 # session.update payload. Verified live: "pcm" (16 kHz in, 24 kHz out) is what the relay wants; OMNI_AUDIO_FMT still
 # overrides it. The server adds input_audio_transcription (qwen3-asr-flash-realtime) itself.
@@ -253,6 +260,10 @@ class OmniLive:
         elif t == "conversation.item.input_audio_transcription.completed":
             txt = ev.get("transcript") or ""
             if txt: self.transcript.append(("you", txt)); self._log("you", txt)
+            if STOP_RE.match(txt):                        # local stop: hover now, whether or not the model calls the tool
+                self.stats["local_stops"] = self.stats.get("local_stops", 0) + 1
+                try: self.on_intent({"intent": "hover"})
+                except Exception as e: self.last_error = f"local stop: {e}"
         elif t == "response.created":
             self._t_resp = time.monotonic(); self.t_first_audio = 0.0; self._resp_active = True
         elif t == "response.done":
