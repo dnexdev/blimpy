@@ -16,3 +16,4 @@ sim_out/
 calib/*
 !calib/laptop_intrinsics.npz
 !calib/mat.json
+!calib/MEASUREMENTS.md

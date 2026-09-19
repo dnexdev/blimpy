@@ -367,6 +367,7 @@ works (flagged "pitch uncertain"); put cameras at ~1.8 m and the error shrinks 4
 Moved a camera? `--auto-calib` re-solves it when the drift check trips for 3 s. Changed focus/zoom? Redo `intrinsics.py`.
 
 ### Numbers to measure on site (and where each one lives)
+Every number actually measured is logged with its date in `calib/MEASUREMENTS.md` (tag edge 136.7 mm, checker square 22.8 mm so far).
 | Measure | Goes into | Why it matters |
 |---|---|---|
 | black edge of the printed tag | `config.TAG_SIZE_M` (saved into `calib/<name>_extrinsics.npz`, checked by `vision_check`) | every world position scales with it |
