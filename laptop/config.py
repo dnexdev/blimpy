@@ -12,7 +12,8 @@ CALIB_NAMES = {"A": "iphone", "B": "B"}   # which calib/<name>_*.npz each role u
 ROTATE = {"A": 0, "B": 90}              # degrees clockwise applied to each stream (phone held in portrait -> 90); calibrate at the rotated size
 
 # --- OMNI Live (Huawei track): cloud ears/eyes/mouth via Qwen3.5-Omni on the yibuapi relay (laptop/voice/omni.py) ---
-#     Key from the sponsor email -> set OMNI_API_KEY in the shell (never in the repo). Usage ledger: data/omni_usage.jsonl
+#     Team key from the organisers' e-mail -> env YIBU_API_KEY (or OMNI_API_KEY), never in the repo. Every call is logged
+#     to data/omni_usage.jsonl in the organisers' schema; tools/omni_report.py builds the report they want back.
 OMNI = dict(
     CAMERA="0",              # what Blimpy SEES in conversation (laptop webcam facing the user at the desk). Not one of SOURCES
                              # above if localize.py is running on this laptop: Windows gives a webcam to ONE process only.
