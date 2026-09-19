@@ -52,44 +52,51 @@
   ol.steps > li::before { content: counter(step, decimal-leading-zero); position: absolute; left: 0; top: 12px; font-family: var(--cond); font-weight: 700; font-size: 26px; color: var(--dim); font-variant-numeric: tabular-nums; }
   ol.steps > li strong { font-family: var(--cond); font-size: 18px; font-weight: 600; display: block; margin-bottom: 4px; }
   ol.steps p { margin: 6px 0; }
+  ol.rules { padding-left: 22px; max-width: 72ch; }
+  ol.rules li { margin: 8px 0; }
   ul { padding-left: 20px; max-width: 70ch; }
   li { margin: 4px 0; }
   .callout { border-left: 4px solid var(--warn); background: var(--warn-soft); padding: 10px 14px; margin: 16px 0; max-width: 72ch; }
   .callout.ok { border-color: var(--ok); background: var(--ok-soft); }
+  .callout.dim { border-color: var(--dim); background: var(--dim-soft); }
   .callout strong { font-family: var(--cond); }
   .tag { display: inline-block; font-family: var(--mono); font-size: 11.5px; padding: 1px 7px; border: 1px solid var(--line); border-radius: 3px; color: var(--ink-2); white-space: nowrap; }
   .tag.need { border-color: var(--warn); color: var(--warn); }
-  .tag.have { border-color: var(--ok); color: var(--ok); }
   .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px 32px; }
+  .measure { color: var(--warn); font-family: var(--mono); font-size: 12px; letter-spacing: 0.06em; }
   @media (max-width: 600px) { h1 { font-size: 32px; } .titleblock { grid-template-columns: 1fr; } ol.steps > li { padding-left: 50px; } }
   @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; } }
 </style>
 
 <main>
-  <div class="eyebrow">Sheet 1 of 1 · Helium balloon follow-me robot</div>
+  <div class="eyebrow">Sheet 1 of 1 · Helium balloon follow-me robot · revision B</div>
   <div class="titleblock">
     <div>
       <h1>Blimpy Build Blueprint</h1>
-      <p class="lede">Everything between the helium and the laptop: the envelope, the gondola, four motors, two driver boards, the ESP32 brain, the battery, and the two cameras that watch the room. Read the drawings, then follow the steps in order.</p>
+      <p class="lede">The robot the software already expects, read out of the code: the balloon, the gondola built around the hardware team's breadboard, four motors, the clip that hangs it, and the room it flies in. Read the drawings, then follow the steps in order.</p>
     </div>
     <dl>
-      <dt>Firmware</dt><dd>Bluetooth motor box (BalloonRobot); mixer on the laptop</dd>
-      <dt>Board flashed</dt><dd>blimpy-9910</dd>
-      <dt>Contract</dt><dd>PROTOCOL.md §6, §9</dd>
-      <dt>Units</dt><dd>metres, grams-force</dd>
+      <dt>Gondola</dt><dd>hardware team's Bluetooth box (BalloonRobot)</dd>
+      <dt>Brain</dt><dd>the laptop: mixer, failsafe, vision, voice</dd>
+      <dt>Contract</dt><dd>PROTOCOL.md §1b, §6; laptop/config.py PHYS, BLE</dd>
+      <dt>Text version</dt><dd>docs/ROBOT_BUILD.md</dd>
+      <dt>Units</dt><dd>metres, grams-force, percent duty</dd>
     </dl>
   </div>
 
   <h2>1. What you are building</h2>
-  <p>A 1.1 m latex balloon carries a small gondola directly under it. The gondola has four little propellers and an ESP32 that only does reflexes: mix the four motors, hold the yaw rate, and cut power if the laptop goes quiet. Two cameras in the room see the balloon and the person; the laptop does everything else and sends four numbers to the gondola twenty times a second.</p>
+  <p>A plain white latex balloon about 1.1 m across, with a small flat gondola clipped tight under it. On the gondola: the hardware team's breadboard (Bluetooth board, two motor drivers, the IMU), one battery, and four little motors: two at the back pointing forward (L and R), one sideways through the middle (S), one pointing down under the middle (V). Nothing else flies. The laptop watches the room with its webcam, talks to the gondola over Bluetooth, and does all the thinking. If the laptop goes quiet for half a second, every motor stops.</p>
+  <p>Numbers marked <span class="measure">MEASURE</span> are placeholders in <code>laptop/config.py</code>. Measure them on the bench, write them in, log them with the date in <code>calib/MEASUREMENTS.md</code>.</p>
 
   <figure class="sheet">
-    <svg viewBox="0 0 900 470" role="img" aria-label="Side elevation: balloon of 1.10 m diameter with the gondola hung just under it, centre of the balloon at 1.7 m above the floor, a person 1.1 to 1.5 m away, and the floor tag at the world origin.">
+    <svg viewBox="0 0 900 470" role="img" aria-label="Side elevation: a balloon of 1.10 m diameter with its centre 1.7 m above the floor, the gondola hanging 0.6 to 0.7 m below the centre, a person 1.5 m away, the mat board on the floor at the world origin, and the laptop webcam on a table at the right.">
       <defs>
         <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker>
         <marker id="ahd" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--dim)"/></marker>
       </defs>
-      <!-- floor -->
+      <!-- ceiling and floor -->
+      <line x1="40" y1="22" x2="860" y2="22" stroke="currentColor" stroke-width="1" stroke-dasharray="6 5" opacity="0.6"/>
+      <text x="48" y="16" font-size="11.5" fill="currentColor" opacity="0.8">ceiling 2.5 m or more (top of the balloon is at 2.25 m)</text>
       <line x1="40" y1="420" x2="860" y2="420" stroke="currentColor" stroke-width="2"/>
       <g stroke="currentColor" stroke-width="1" opacity="0.5">
         <line x1="60" y1="420" x2="48" y2="432"/><line x1="100" y1="420" x2="88" y2="432"/><line x1="140" y1="420" x2="128" y2="432"/><line x1="180" y1="420" x2="168" y2="432"/>
@@ -98,406 +105,406 @@
         <line x1="540" y1="420" x2="528" y2="432"/><line x1="580" y1="420" x2="568" y2="432"/><line x1="620" y1="420" x2="608" y2="432"/><line x1="660" y1="420" x2="648" y2="432"/>
         <line x1="700" y1="420" x2="688" y2="432"/><line x1="740" y1="420" x2="728" y2="432"/><line x1="780" y1="420" x2="768" y2="432"/><line x1="820" y1="420" x2="808" y2="432"/>
       </g>
-      <!-- floor tag at origin -->
-      <rect x="300" y="414" width="30" height="6" fill="currentColor"/>
-      <text x="315" y="452" font-size="12" text-anchor="middle" fill="currentColor">floor tag = world origin</text>
-      <!-- balloon: scale 1 m = 160 px; centre at z=1.7 m -> y = 420 - 272 = 148 -->
+      <!-- mat board at the origin -->
+      <rect x="287" y="414" width="56" height="6" fill="currentColor"/>
+      <text x="315" y="452" font-size="12" text-anchor="middle" fill="currentColor">mat board (four tags) = world origin</text>
+      <!-- balloon: 1 m = 160 px; centre z = 1.7 m -> y = 148 -->
       <circle cx="315" cy="148" r="88" fill="none" stroke="currentColor" stroke-width="2.5"/>
-      <text x="315" y="120" font-size="13" text-anchor="middle" fill="currentColor">48" latex, inflated to 1.10 m</text>
-      <text x="315" y="138" font-size="12" text-anchor="middle" fill="currentColor" opacity="0.7">0.70 m³ · net lift ≈ 640 g</text>
-      <!-- harness + gondola -->
-      <line x1="300" y1="234" x2="306" y2="246" stroke="currentColor" stroke-width="1.5"/>
-      <line x1="330" y1="234" x2="324" y2="246" stroke="currentColor" stroke-width="1.5"/>
-      <rect x="286" y="246" width="58" height="16" fill="var(--paper)" stroke="currentColor" stroke-width="2"/>
-      <text x="315" y="258" font-size="10.5" text-anchor="middle" fill="currentColor">gondola</text>
-      <!-- rear motor (L/R seen from side) -->
-      <rect x="335" y="250" width="14" height="8" fill="currentColor"/>
-      <line x1="349" y1="246" x2="349" y2="262" stroke="currentColor" stroke-width="2"/>
-      <!-- V motor below -->
-      <line x1="315" y1="262" x2="315" y2="274" stroke="currentColor" stroke-width="2"/>
-      <line x1="303" y1="274" x2="327" y2="274" stroke="currentColor" stroke-width="3"/>
-      <text x="360" y="280" font-size="11" fill="currentColor">V prop pushes UP</text>
+      <text x="315" y="120" font-size="13" text-anchor="middle" fill="currentColor">48-inch latex, inflated to 1.10 m</text>
+      <text x="315" y="138" font-size="12" text-anchor="middle" fill="currentColor" opacity="0.7">0.70 m³ · lifts ≈ 630 g (95 % He) / 525 g (party blend)</text>
+      <!-- neck, knot, ring -->
+      <path d="M309,236 L321,236 L318,242 L312,242 z" fill="currentColor"/>
+      <circle cx="315" cy="246" r="3.5" fill="none" stroke="currentColor" stroke-width="2"/>
+      <!-- bridle -->
+      <line x1="315" y1="249.5" x2="301" y2="256" stroke="currentColor" stroke-width="1.2"/>
+      <line x1="315" y1="249.5" x2="329" y2="256" stroke="currentColor" stroke-width="1.2"/>
+      <line x1="315" y1="249.5" x2="334" y2="256" stroke="currentColor" stroke-width="1.2"/>
+      <!-- board, rear motor (behind = right), V below, ultrasonic at the front (left) -->
+      <rect x="300" y="256" width="30" height="7" fill="var(--paper)" stroke="currentColor" stroke-width="1.8"/>
+      <rect x="330" y="256" width="11" height="7" fill="currentColor"/>
+      <line x1="344" y1="253.5" x2="344" y2="265.5" stroke="currentColor" stroke-width="2.4"/>
+      <line x1="315" y1="263" x2="315" y2="270" stroke="currentColor" stroke-width="2"/>
+      <line x1="303" y1="270" x2="327" y2="270" stroke="currentColor" stroke-width="3"/>
+      <rect x="300" y="263" width="8" height="5" fill="currentColor"/>
+      <line x1="304" y1="268" x2="304" y2="420" stroke="currentColor" stroke-width="1" stroke-dasharray="3 4" opacity="0.6"/>
+      <!-- leaders -->
+      <line x1="319" y1="246" x2="392" y2="230" stroke="currentColor" stroke-width="0.8" opacity="0.7"/>
+      <text x="396" y="232" font-size="11" fill="currentColor">neck knot + keyring: the gondola clips here</text>
+      <line x1="344" y1="259" x2="392" y2="246" stroke="currentColor" stroke-width="0.8" opacity="0.7"/>
+      <text x="396" y="248" font-size="11" fill="currentColor">L/R prop tips 5 cm or more below the skin</text>
+      <line x1="327" y1="270" x2="392" y2="282" stroke="currentColor" stroke-width="0.8" opacity="0.7"/>
+      <text x="396" y="285" font-size="11" fill="currentColor">V prop, blows down = up</text>
+      <line x1="304" y1="372" x2="392" y2="372" stroke="currentColor" stroke-width="0.8" opacity="0.7"/>
+      <text x="396" y="375" font-size="11" fill="currentColor">alt: ultrasonic (optional)</text>
       <!-- dimensions -->
       <g stroke="var(--dim)" fill="var(--dim)" font-size="12" font-family="IBM Plex Mono, monospace">
         <line x1="227" y1="100" x2="403" y2="100" marker-start="url(#ahd)" marker-end="url(#ahd)"/>
         <line x1="227" y1="94" x2="227" y2="106"/><line x1="403" y1="94" x2="403" y2="106"/>
-        <text x="315" y="92" text-anchor="middle" stroke="none">Ø 1.10 m</text>
+        <text x="315" y="92" text-anchor="middle" stroke="none">Ø 1.10 m (PHYS D, MEASURE)</text>
         <line x1="150" y1="148" x2="150" y2="420" marker-start="url(#ahd)" marker-end="url(#ahd)"/>
         <line x1="144" y1="148" x2="156" y2="148"/>
         <text x="140" y="290" text-anchor="end" stroke="none">1.70 m cruise</text>
-        <text x="140" y="306" text-anchor="end" stroke="none" opacity="0.8">(balloon centre)</text>
-        <line x1="430" y1="148" x2="430" y2="236" marker-start="url(#ahd)" marker-end="url(#ahd)"/>
-        <line x1="424" y1="148" x2="436" y2="148"/><line x1="424" y1="236" x2="436" y2="236"/>
-        <text x="438" y="196" stroke="none">0.55 m</text>
-        <text x="438" y="212" stroke="none" opacity="0.8">motors below centre</text>
-        <line x1="403" y1="330" x2="640" y2="330" marker-start="url(#ahd)" marker-end="url(#ahd)"/>
-        <text x="520" y="322" text-anchor="middle" stroke="none">1.1–1.5 m standoff</text>
+        <text x="140" y="306" text-anchor="end" stroke="none" opacity="0.8">(balloon centre, Z_HOLD)</text>
+        <line x1="440" y1="148" x2="440" y2="259" marker-start="url(#ahd)" marker-end="url(#ahd)"/>
+        <line x1="434" y1="148" x2="446" y2="148"/><line x1="434" y1="259" x2="446" y2="259"/>
+        <text x="448" y="196" stroke="none">0.6-0.7 m</text>
+        <text x="448" y="212" stroke="none" opacity="0.8">centre to motor plane</text>
+        <text x="448" y="228" stroke="none" opacity="0.8">(ARM_BELOW, MEASURE)</text>
+        <line x1="315" y1="345" x2="555" y2="345" marker-start="url(#ahd)" marker-end="url(#ahd)"/>
+        <line x1="315" y1="339" x2="315" y2="351"/><line x1="555" y1="339" x2="555" y2="351"/>
+        <text x="435" y="337" text-anchor="middle" stroke="none">1.5 m centre to centre (D_FOLLOW)</text>
       </g>
-      <!-- person -->
-      <circle cx="690" cy="272" r="14" fill="none" stroke="currentColor" stroke-width="2"/>
-      <line x1="690" y1="286" x2="690" y2="360" stroke="currentColor" stroke-width="2"/>
-      <line x1="690" y1="300" x2="666" y2="336" stroke="currentColor" stroke-width="2"/><line x1="690" y1="300" x2="714" y2="336" stroke="currentColor" stroke-width="2"/>
-      <line x1="690" y1="360" x2="672" y2="420" stroke="currentColor" stroke-width="2"/><line x1="690" y1="360" x2="708" y2="420" stroke="currentColor" stroke-width="2"/>
-      <text x="690" y="452" font-size="12" text-anchor="middle" fill="currentColor">person being followed</text>
-      <!-- camera hint -->
-      <rect x="800" y="150" width="34" height="22" fill="none" stroke="currentColor" stroke-width="2"/>
-      <path d="M834,155 L850,148 L850,174 L834,167 z" fill="currentColor"/>
-      <line x1="817" y1="172" x2="817" y2="420" stroke="currentColor" stroke-width="1.5" stroke-dasharray="4 4"/>
-      <text x="817" y="140" font-size="12" text-anchor="middle" fill="currentColor">camera on a stand</text>
-      <text x="817" y="190" font-size="11" text-anchor="middle" fill="currentColor" opacity="0.7">≈1.8 m, tilted down</text>
+      <!-- person at 1.5 m -->
+      <circle cx="555" cy="272" r="14" fill="none" stroke="currentColor" stroke-width="2"/>
+      <line x1="555" y1="286" x2="555" y2="360" stroke="currentColor" stroke-width="2"/>
+      <line x1="555" y1="300" x2="531" y2="336" stroke="currentColor" stroke-width="2"/><line x1="555" y1="300" x2="579" y2="336" stroke="currentColor" stroke-width="2"/>
+      <line x1="555" y1="360" x2="537" y2="420" stroke="currentColor" stroke-width="2"/><line x1="555" y1="360" x2="573" y2="420" stroke="currentColor" stroke-width="2"/>
+      <text x="555" y="452" font-size="12" text-anchor="middle" fill="currentColor">person being followed</text>
+      <!-- laptop on a table -->
+      <line x1="770" y1="276" x2="860" y2="276" stroke="currentColor" stroke-width="2"/>
+      <line x1="778" y1="276" x2="778" y2="420" stroke="currentColor" stroke-width="1.5"/><line x1="852" y1="276" x2="852" y2="420" stroke="currentColor" stroke-width="1.5"/>
+      <rect x="800" y="270" width="40" height="6" fill="currentColor"/>
+      <line x1="800" y1="270" x2="794" y2="244" stroke="currentColor" stroke-width="3"/>
+      <line x1="796" y1="256" x2="410" y2="150" stroke="currentColor" stroke-width="1" stroke-dasharray="4 4" opacity="0.6"/>
+      <line x1="796" y1="256" x2="345" y2="416" stroke="currentColor" stroke-width="1" stroke-dasharray="4 4" opacity="0.6"/>
+      <text x="815" y="232" font-size="12" text-anchor="middle" fill="currentColor">laptop webcam</text>
+      <text x="815" y="296" font-size="11" text-anchor="middle" fill="currentColor" opacity="0.8">table 0.8-1.0 m up</text>
+      <text x="815" y="310" font-size="11" text-anchor="middle" fill="currentColor" opacity="0.8">mat 2-3 m in front</text>
+      <text x="815" y="324" font-size="11" text-anchor="middle" fill="currentColor" opacity="0.8">balloon 3-5 m away</text>
     </svg>
-    <figcaption>Side elevation. The controller assumes the motors sit about 0.55 m below the balloon's centre, which is what you get by hanging the gondola tight under the envelope. Cruise height is the balloon centre at 1.7 m.</figcaption>
+    <figcaption>Side elevation, 1 m = 160 px. The software steers the balloon's centre and flies it at 1.7 m. The gondola hangs as tight under the balloon as the props allow: every prop tip stays 5 cm or more from the skin, which puts the motor plane about 0.6 to 0.7 m below the centre. Measure that and the inflated diameter once it hangs.</figcaption>
   </figure>
 
   <div class="grid2">
     <div>
       <h3>Numbers the software assumes</h3>
       <div class="tablewrap"><table>
-        <tr><th>Item</th><th class="num">Value</th></tr>
-        <tr><td>Envelope diameter, inflated</td><td class="num">1.10 m</td></tr>
-        <tr><td>Envelope circumference to inflate to</td><td class="num">3.46 m</td></tr>
-        <tr><td>Net lift at 1.10 m, 95% helium</td><td class="num">≈ 640 g</td></tr>
-        <tr><td>Envelope weight</td><td class="num">50 g</td></tr>
-        <tr><td>Gondola budget, all in</td><td class="num">≤ 250 g</td></tr>
-        <tr><td>Trim, motors off</td><td class="num">≈ 1 g heavy</td></tr>
-        <tr><td>Rear motor spacing, L to R</td><td class="num">0.25 m</td></tr>
-        <tr><td>Thrust per motor, full</td><td class="num">≈ 50 gf</td></tr>
-        <tr><td>Thrust at the 50% duty cap</td><td class="num">≈ 12 gf</td></tr>
-        <tr><td>Reverse thrust, fixed prop</td><td class="num">≈ 60%</td></tr>
+        <tr><th>Item</th><th class="num">Value</th><th>Config</th></tr>
+        <tr><td>Envelope diameter, inflated</td><td class="num">1.10 m</td><td><code>PHYS D</code> <span class="measure">MEASURE</span></td></tr>
+        <tr><td>Tape around the fattest part</td><td class="num">3.46 m</td><td>= π × 1.10</td></tr>
+        <tr><td>Lift at 1.10 m after the 50 g skin</td><td class="num">≈ 630 / 525 g</td><td>95 % He / party blend</td></tr>
+        <tr><td>Gondola, all in (model)</td><td class="num">0.25 kg</td><td><code>PHYS M_GONDOLA</code> <span class="measure">MEASURE</span></td></tr>
+        <tr><td>Trim, motors off</td><td class="num">≈ 1 g heavy</td><td><code>world FREE_LIFT_N</code></td></tr>
+        <tr><td>Rear motor spacing, L to R</td><td class="num">0.25 m</td><td><code>PHYS MOTOR_SPACING</code> <span class="measure">MEASURE</span></td></tr>
+        <tr><td>Motor plane below the centre</td><td class="num">0.55 m</td><td><code>PHYS ARM_BELOW</code> <span class="measure">MEASURE</span></td></tr>
+        <tr><td>Ultrasonic lens below the centre</td><td class="num">0.60 m</td><td><code>PHYS TOF_BELOW</code> <span class="measure">MEASURE</span></td></tr>
+        <tr><td>Thrust per motor at 100 %</td><td class="num">≈ 50 gf</td><td><code>PHYS T_MAX</code> <span class="measure">MEASURE</span></td></tr>
+        <tr><td>Thrust at the 50 % cap</td><td class="num">≈ 12 gf</td><td><code>protocol CAP</code></td></tr>
+        <tr><td>Reverse thrust, fixed prop</td><td class="num">≈ 60 %</td><td><code>PHYS REV_EFF</code> <span class="measure">MEASURE</span></td></tr>
+        <tr><td>A motor must turn by</td><td class="num">10 % duty</td><td><code>FOLLOW DUTY_MIN</code></td></tr>
+        <tr><td>Cruise height, allowed band</td><td class="num">1.7 m, 0.9-2.4</td><td><code>FOLLOW Z_HOLD</code>, <code>AVOID Z_MIN/Z_MAX</code></td></tr>
       </table></div>
     </div>
     <div>
       <h3>Why four motors, all reversible</h3>
       <p>A sphere has no keel. After a turn it keeps sliding the old way, and at these speeds drag will not stop it in time; only thrust does. So the two rear motors drive, brake, and steer; a sideways motor through the centre kills sideways drift; a vertical motor holds height, because lift changes by grams as the hall warms and helium leaks. Ballast alone puts it in the ceiling within a minute.</p>
       <p>Trim the balloon about one gram heavy. On power loss it settles to the floor instead of the ceiling, and the vertical motor mostly pushes up, which is its efficient direction.</p>
+      <h3>Why nothing else flies</h3>
+      <p>There is no camera, microphone or speaker on the balloon. The laptop webcam is the room camera, the laptop mic and speakers (or AirPods) are the voice. Every gram saved on the gondola is a gram of lift margin, and the demo works in any room with the laptop, the mat board and the balloon.</p>
     </div>
   </div>
 
-  <h2>2. Motor layout, plan view</h2>
+  <h2>2. The gondola, plan view</h2>
+  <p>The breadboard is the gondola body. A stiff stick under its rear edge carries L and R. S sits on the right edge, V under the middle, the battery under the left half so the board hangs level. Forward is the direction L and R push.</p>
   <figure class="sheet">
-    <svg viewBox="0 0 900 400" role="img" aria-label="Plan view of the gondola: motors L and R at the rear 25 cm apart with axes pointing forward, motor S sideways through the centre, motor V vertical at the centre, and the body x axis pointing forward.">
-      <!-- gondola body -->
-      <rect x="380" y="130" width="140" height="140" rx="6" fill="none" stroke="currentColor" stroke-width="2"/>
-      <text x="450" y="200" font-size="12" text-anchor="middle" fill="currentColor">ESP32 · 2× DRV8833</text>
-      <text x="450" y="216" font-size="12" text-anchor="middle" fill="currentColor">IMU · battery</text>
-      <!-- rear crossbar -->
-      <line x1="450" y1="270" x2="450" y2="300" stroke="currentColor" stroke-width="3"/>
-      <line x1="300" y1="300" x2="600" y2="300" stroke="currentColor" stroke-width="3"/>
-      <!-- motor L (left of forward = +y side, shown at top in plan? forward is up on page; left is page-left) -->
-      <rect x="290" y="288" width="20" height="24" fill="currentColor"/>
-      <line x1="300" y1="288" x2="300" y2="250" stroke="currentColor" stroke-width="2" marker-end="url(#ah)"/>
-      <line x1="284" y1="284" x2="316" y2="284" stroke="currentColor" stroke-width="3"/>
-      <text x="300" y="336" font-size="14" font-family="IBM Plex Mono, monospace" text-anchor="middle" fill="currentColor">L</text>
-      <rect x="590" y="288" width="20" height="24" fill="currentColor"/>
-      <line x1="600" y1="288" x2="600" y2="250" stroke="currentColor" stroke-width="2" marker-end="url(#ah)"/>
-      <line x1="584" y1="284" x2="616" y2="284" stroke="currentColor" stroke-width="3"/>
-      <text x="600" y="336" font-size="14" font-family="IBM Plex Mono, monospace" text-anchor="middle" fill="currentColor">R</text>
-      <!-- motor S sideways through centre -->
-      <rect x="438" y="122" width="24" height="16" fill="currentColor"/>
-      <line x1="438" y1="130" x2="400" y2="130" stroke="currentColor" stroke-width="2" marker-end="url(#ah)"/>
-      <line x1="442" y1="114" x2="442" y2="146" stroke="currentColor" stroke-width="3"/>
-      <text x="450" y="106" font-size="14" font-family="IBM Plex Mono, monospace" text-anchor="middle" fill="currentColor">S</text>
-      <text x="420" y="100" font-size="11" text-anchor="end" fill="currentColor" opacity="0.8">axis through the centre, no yaw coupling</text>
-      <!-- motor V at centre -->
-      <circle cx="450" cy="240" r="14" fill="var(--paper)" stroke="currentColor" stroke-width="2"/>
-      <circle cx="450" cy="240" r="3" fill="currentColor"/>
-      <text x="472" y="244" font-size="14" font-family="IBM Plex Mono, monospace" fill="currentColor">V</text>
-      <text x="472" y="260" font-size="11" fill="currentColor" opacity="0.8">under the body, prop pushes up</text>
-      <!-- body axes -->
+    <svg viewBox="0 0 900 450" role="img" aria-label="Plan view of the gondola: the breadboard in the middle with the Bluetooth board, drivers and IMU; motors L and R on a rear bar 25 cm apart with their thrust lines pointing forward and props behind; motor S on the right edge of the board with its thrust line through the board's centre; motor V under the centre; the battery under the left half; an optional ultrasonic at the front edge.">
+      <!-- board -->
+      <rect x="365" y="150" width="170" height="80" rx="4" fill="var(--paper)" stroke="currentColor" stroke-width="2"/>
+      <text x="450" y="168" font-size="11.5" text-anchor="middle" fill="currentColor">breadboard (not to scale)</text>
+      <text x="450" y="182" font-size="11" text-anchor="middle" fill="currentColor" opacity="0.8">Bluetooth board · 2 motor drivers</text>
+      <!-- battery under the left half -->
+      <rect x="374" y="190" width="56" height="32" rx="3" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="4 3"/>
+      <text x="402" y="209" font-size="10.5" text-anchor="middle" fill="currentColor">battery</text>
+      <text x="402" y="220" font-size="9.5" text-anchor="middle" fill="currentColor" opacity="0.8">(under)</text>
+      <!-- V at the centre -->
+      <circle cx="450" cy="206" r="13" fill="var(--paper)" stroke="currentColor" stroke-width="2"/>
+      <circle cx="450" cy="206" r="3" fill="currentColor"/>
+      <text x="450" y="197" font-size="12" font-family="IBM Plex Mono, monospace" text-anchor="middle" fill="currentColor">V</text>
+      <!-- IMU -->
+      <rect x="486" y="194" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5"/>
+      <line x1="496" y1="211" x2="496" y2="198" stroke="currentColor" stroke-width="1.5" marker-end="url(#ah)"/>
+      <text x="519" y="208" font-size="11" fill="currentColor">IMU</text>
+      <!-- ultrasonic at the front edge -->
+      <rect x="440" y="134" width="20" height="16" fill="currentColor"/>
+      <text x="450" y="126" font-size="11" text-anchor="middle" fill="currentColor">ultrasonic (optional), looks down, 10 cm+ from V</text>
+      <!-- S motor on the right edge -->
+      <rect x="535" y="182" width="26" height="16" fill="currentColor"/>
+      <line x1="567" y1="174" x2="567" y2="206" stroke="currentColor" stroke-width="3"/>
+      <text x="580" y="184" font-size="14" font-family="IBM Plex Mono, monospace" fill="currentColor">S</text>
+      <text x="580" y="200" font-size="11" fill="currentColor">sideways motor, thrust line through</text>
+      <text x="580" y="214" font-size="11" fill="currentColor">the board's centre; prop outboard</text>
+      <line x1="640" y1="232" x2="560" y2="232" stroke="currentColor" stroke-width="2" marker-end="url(#ah)"/>
+      <text x="646" y="236" font-size="11" fill="currentColor">"+ S" pushes the gondola LEFT (air blows right)</text>
+      <!-- rear bar along the rear edge -->
+      <line x1="325" y1="234" x2="575" y2="234" stroke="currentColor" stroke-width="4"/>
+      <!-- motor L -->
+      <rect x="317" y="226" width="16" height="24" fill="currentColor"/>
+      <line x1="311" y1="256" x2="339" y2="256" stroke="currentColor" stroke-width="3"/>
+      <line x1="325" y1="226" x2="325" y2="196" stroke="currentColor" stroke-width="2" marker-end="url(#ah)"/>
+      <text x="325" y="282" font-size="14" font-family="IBM Plex Mono, monospace" text-anchor="middle" fill="currentColor">L</text>
+      <!-- motor R -->
+      <rect x="567" y="226" width="16" height="24" fill="currentColor"/>
+      <line x1="561" y1="256" x2="589" y2="256" stroke="currentColor" stroke-width="3"/>
+      <line x1="575" y1="226" x2="575" y2="196" stroke="currentColor" stroke-width="2" marker-end="url(#ah)"/>
+      <text x="575" y="282" font-size="14" font-family="IBM Plex Mono, monospace" text-anchor="middle" fill="currentColor">R</text>
+      <text x="450" y="300" font-size="11" text-anchor="middle" fill="currentColor">rear bar: a 30 cm stick zip-tied under the board's rear edge. Motor axes point forward, props behind the bar blow backward.</text>
+      <text x="450" y="314" font-size="11" text-anchor="middle" fill="currentColor" opacity="0.8">one clockwise prop, one counter-clockwise prop (the kit has both) so their twist cancels</text>
+      <!-- spacing dimension -->
       <g stroke="var(--dim)" fill="var(--dim)" font-family="IBM Plex Mono, monospace" font-size="12">
-        <line x1="120" y1="300" x2="120" y2="180" marker-end="url(#ahd)"/>
-        <text x="128" y="190" stroke="none">+x forward</text>
-        <line x1="120" y1="300" x2="220" y2="300" marker-end="url(#ahd)"/>
-        <text x="150" y="322" stroke="none">+y left (as flown)</text>
-        <text x="120" y="350" stroke="none" opacity="0.8">yaw + = counter-clockwise from above</text>
-        <line x1="300" y1="370" x2="600" y2="370" marker-start="url(#ahd)" marker-end="url(#ahd)"/>
-        <line x1="300" y1="364" x2="300" y2="376"/><line x1="600" y1="364" x2="600" y2="376"/>
-        <text x="450" y="390" text-anchor="middle" stroke="none">0.25 m</text>
+        <line x1="325" y1="340" x2="575" y2="340" marker-start="url(#ahd)" marker-end="url(#ahd)"/>
+        <line x1="325" y1="334" x2="325" y2="346"/><line x1="575" y1="334" x2="575" y2="346"/>
+        <text x="450" y="360" text-anchor="middle" stroke="none">0.25 m axis to axis (MOTOR_SPACING, MEASURE)</text>
+        <!-- axes -->
+        <line x1="150" y1="400" x2="150" y2="310" marker-end="url(#ahd)"/>
+        <text x="158" y="322" stroke="none">+x forward</text>
+        <line x1="150" y1="400" x2="70" y2="400" marker-end="url(#ahd)"/>
+        <text x="60" y="420" stroke="none">+y left</text>
+        <text x="60" y="440" stroke="none" opacity="0.8">yaw + = counter-clockwise seen from above</text>
       </g>
       <!-- mixing notes -->
       <g font-size="12" fill="currentColor">
-        <text x="700" y="150">both L+R forward → drive</text>
-        <text x="700" y="170">both L+R reverse → brake / back</text>
-        <text x="700" y="190">L ≠ R → yaw (PI loop on the gyro)</text>
-        <text x="700" y="210">S → strafe, kill side drift</text>
-        <text x="700" y="230">V → height hold</text>
+        <text x="650" y="330">both L+R forward → drive</text>
+        <text x="650" y="350">both L+R reverse → brake / back</text>
+        <text x="650" y="370">R harder than L → turn left (yaw +)</text>
+        <text x="650" y="390">S → sidestep, kill side drift</text>
+        <text x="650" y="410">V → hold height (blows down)</text>
       </g>
     </svg>
-    <figcaption>Plan view, forward is up the page. Mount L and R with their thrust lines parallel to the body x axis and 25 cm apart. Mount S so its thrust line passes through the gondola's centre; a few centimetres off gives a steady yaw torque the firmware's integrator will cancel, but centred is better. V hangs under the middle with the prop clear of everything.</figcaption>
+    <figcaption>Plan view, forward is up the page, the balloon's left is the page's left. Mount L and R with their thrust lines parallel to the body x axis and 25 cm apart. S may sit at the board's edge (a sideways offset does no harm) but its thrust line must cross the board's centre when seen from above; a forward/back offset gives a steady twist that the yaw integrator can only cancel up to 15 % duty. V hangs under the middle with 2 cm of free air above and below the prop.</figcaption>
   </figure>
 
-  <div class="callout"><strong>Prop direction matters because the props are fixed.</strong> A propeller gives about 60% thrust in reverse. Choose each motor's spin direction so the efficient direction is the one used most: forward for L and R, up for V. S is used both ways; either is fine. The 8520 set comes with clockwise and counter-clockwise props; put a CW and a CCW on L and R so their torques cancel.</div>
+  <ol class="rules">
+    <li><strong>L and R point forward, parallel, 25 cm apart, at the rear.</strong> Both forward = drive. Both backward = brake. One stronger than the other = turn.</li>
+    <li><strong>S goes through the middle.</strong> Edge of the board is fine; in line with the middle of the board, not ahead of or behind it.</li>
+    <li><strong>V under the middle, prop clear.</strong> Nothing under it: no wires, no battery, no ultrasonic.</li>
+    <li><strong>IMU flat, chip facing up, fixed to the board, not dangling on wires.</strong> Only the gyro's Z axis matters; one config flag fixes its sign after the bench check.</li>
+    <li><strong>Nothing within 3 cm of a prop disc</strong>: strings, wires, the balloon skin, fingers. Bridle strings meet the rear bar 3 cm inboard of the motors, in front of the prop plane.</li>
+    <li><strong>Every motor on soft foam tape</strong>, wires taped or zip-tied down. Vibration is the noise, and the IMU reads vibration as motion.</li>
+    <li><strong>Ultrasonic (if used) at the front edge, looking straight down</strong>, 10 cm or more from the V prop so the prop stays out of its 15° cone.</li>
+    <li><strong>Battery under the left half</strong> to balance S on the right; move it until the board hangs level from the ring.</li>
+  </ol>
 
-  <h2>3. Wiring</h2>
-  <div class="callout"><strong>Link changed.</strong> The gondola runs the hardware team's Bluetooth firmware: it advertises as <code>BalloonRobot</code>, takes per-motor percentages (<code>MOTORS c d e f</code>, <code>STOP</code>) and streams IMU lines. The laptop bridge <code>laptop/control/ble_gondola.py</code> runs the mixer and the failsafe. The pin table below is the legacy WiFi build; the motor roles (L and R rear, S sideways, V vertical) and the plan view still apply. Map C/D/E/F to L/R/S/V in <code>config.BLE</code> on the bench (README section 3).</div>
-  <p>One ESP32-C3 SuperMini drives two DRV8833 dual H-bridge boards. Each motor uses one bridge channel as PWM plus direction, because the C3 has only six PWM outputs. Both driver boards share one enable line, which is also the onboard LED, so LED lit means motors disabled.</p>
-
+  <h2>3. Hanging it: the clip, the bridle, the trim</h2>
   <figure class="sheet">
-    <svg viewBox="0 0 900 560" role="img" aria-label="Wiring diagram: LiPo through a switch feeds the two DRV8833 VM pins directly and a 3.3 V regulator into the ESP32 3V3 pin. ESP32 GPIO 0/4, 1/5 drive board A channels for motors L and R; GPIO 3/20, 10/21 drive board B for motors S and V; GPIO 8 enables both boards; GPIO 6 and 7 are the I2C bus to the IMU and rangefinder.">
-      <defs>
-        <marker id="aw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker>
-      </defs>
-      <g font-family="IBM Plex Mono, monospace" font-size="11.5" fill="currentColor">
-        <!-- Battery -->
-        <rect x="30" y="230" width="130" height="70" fill="none" stroke="currentColor" stroke-width="2"/>
-        <text x="95" y="255" text-anchor="middle" font-size="12.5">LiPo 1S 3.7 V</text>
-        <text x="95" y="272" text-anchor="middle">1800 mAh</text>
-        <text x="95" y="289" text-anchor="middle" opacity="0.8">JST-PH</text>
-        <!-- switch -->
-        <line x1="160" y1="245" x2="190" y2="245" stroke="currentColor" stroke-width="2"/>
-        <line x1="190" y1="245" x2="212" y2="232" stroke="currentColor" stroke-width="2"/>
-        <circle cx="190" cy="245" r="3" fill="currentColor"/><circle cx="218" cy="245" r="3" fill="currentColor"/>
-        <text x="204" y="222" text-anchor="middle" opacity="0.8">SPST</text>
-        <!-- bulk cap -->
-        <line x1="240" y1="245" x2="240" y2="270" stroke="currentColor" stroke-width="2"/>
-        <line x1="230" y1="270" x2="250" y2="270" stroke="currentColor" stroke-width="2.5"/>
-        <line x1="230" y1="278" x2="250" y2="278" stroke="currentColor" stroke-width="2.5"/>
-        <line x1="240" y1="278" x2="240" y2="300" stroke="currentColor" stroke-width="2"/>
-        <text x="256" y="276">1000 µF</text>
-        <!-- VBAT rail -->
-        <line x1="218" y1="245" x2="300" y2="245" stroke="currentColor" stroke-width="2"/>
-        <text x="270" y="238" text-anchor="middle" font-weight="500">VBAT</text>
-        <!-- LDO -->
-        <rect x="300" y="60" width="150" height="56" fill="none" stroke="currentColor" stroke-width="2"/>
-        <text x="375" y="83" text-anchor="middle" font-size="12.5">3.3 V LDO ≥ 500 mA</text>
-        <text x="375" y="101" text-anchor="middle" opacity="0.8">HT7833 / XC6220 / ME6211</text>
-        <line x1="300" y1="245" x2="300" y2="88" stroke="currentColor" stroke-width="2" marker-end="url(#aw)"/>
-        <text x="292" y="170" text-anchor="end">VIN</text>
-        <line x1="450" y1="88" x2="500" y2="88" stroke="currentColor" stroke-width="2" marker-end="url(#aw)"/>
-        <text x="475" y="80" text-anchor="middle">3V3</text>
-        <!-- VM to drivers -->
-        <line x1="300" y1="245" x2="300" y2="330" stroke="currentColor" stroke-width="2"/>
-        <line x1="300" y1="330" x2="690" y2="330" stroke="currentColor" stroke-width="2"/>
-        <line x1="690" y1="330" x2="690" y2="142" stroke="currentColor" stroke-width="2" marker-end="url(#aw)"/>
-        <line x1="690" y1="330" x2="690" y2="392" stroke="currentColor" stroke-width="2" marker-end="url(#aw)"/>
-        <text x="495" y="344" text-anchor="middle">VM of both boards, straight from the battery · 100 µF on each VM</text>
-        <!-- ESP32 -->
-        <rect x="500" y="40" width="150" height="330" fill="var(--paper)" stroke="currentColor" stroke-width="2.5"/>
-        <text x="575" y="62" text-anchor="middle" font-size="13" font-weight="500">ESP32-C3 SuperMini</text>
-        <text x="575" y="78" text-anchor="middle" opacity="0.8">blimpy-9910</text>
-        <text x="508" y="96">3V3</text>
-        <text x="508" y="112">GND</text>
-        <!-- right-side pins -->
-        <text x="642" y="140" text-anchor="end">GPIO 0  PWM L</text>
-        <text x="642" y="156" text-anchor="end">GPIO 4  DIR L</text>
-        <text x="642" y="172" text-anchor="end">GPIO 1  PWM R</text>
-        <text x="642" y="188" text-anchor="end">GPIO 5  DIR R</text>
-        <text x="642" y="218" text-anchor="end">GPIO 3  PWM S</text>
-        <text x="642" y="234" text-anchor="end">GPIO 20 DIR S</text>
-        <text x="642" y="250" text-anchor="end">GPIO 10 PWM V</text>
-        <text x="642" y="266" text-anchor="end">GPIO 21 DIR V</text>
-        <text x="642" y="296" text-anchor="end">GPIO 8  nSLEEP</text>
-        <text x="508" y="330">GPIO 6  SDA</text>
-        <text x="508" y="346">GPIO 7  SCL</text>
-        <!-- Driver A -->
-        <rect x="720" y="100" width="160" height="120" fill="none" stroke="currentColor" stroke-width="2"/>
-        <text x="800" y="120" text-anchor="middle" font-size="12.5" font-weight="500">DRV8833  board A</text>
-        <text x="728" y="140">AIN1  AIN2</text><text x="872" y="140" text-anchor="end">AO1 AO2 → L</text>
-        <text x="728" y="172">BIN1  BIN2</text><text x="872" y="172" text-anchor="end">BO1 BO2 → R</text>
-        <text x="728" y="204">STBY</text><text x="872" y="204" text-anchor="end">VM · GND</text>
-        <!-- Driver B -->
-        <rect x="720" y="350" width="160" height="120" fill="none" stroke="currentColor" stroke-width="2"/>
-        <text x="800" y="370" text-anchor="middle" font-size="12.5" font-weight="500">DRV8833  board B</text>
-        <text x="728" y="390">AIN1  AIN2</text><text x="872" y="390" text-anchor="end">AO1 AO2 → S</text>
-        <text x="728" y="422">BIN1  BIN2</text><text x="872" y="422" text-anchor="end">BO1 BO2 → V</text>
-        <text x="728" y="454">STBY</text><text x="872" y="454" text-anchor="end">VM · GND</text>
-        <!-- signal lines A -->
-        <line x1="650" y1="136" x2="720" y2="136" stroke="currentColor" stroke-width="1.5"/>
-        <line x1="650" y1="152" x2="720" y2="152" stroke="currentColor" stroke-width="1.5" opacity="0.6"/>
-        <line x1="650" y1="168" x2="720" y2="168" stroke="currentColor" stroke-width="1.5"/>
-        <line x1="650" y1="184" x2="720" y2="184" stroke="currentColor" stroke-width="1.5" opacity="0.6"/>
-        <!-- signal lines B -->
-        <line x1="650" y1="214" x2="700" y2="214" stroke="currentColor" stroke-width="1.5"/>
-        <line x1="700" y1="214" x2="700" y2="386" stroke="currentColor" stroke-width="1.5"/>
-        <line x1="700" y1="386" x2="720" y2="386" stroke="currentColor" stroke-width="1.5"/>
-        <line x1="650" y1="230" x2="706" y2="230" stroke="currentColor" stroke-width="1.5" opacity="0.6"/>
-        <line x1="706" y1="230" x2="706" y2="402" stroke="currentColor" stroke-width="1.5" opacity="0.6"/>
-        <line x1="706" y1="402" x2="720" y2="402" stroke="currentColor" stroke-width="1.5" opacity="0.6"/>
-        <line x1="650" y1="246" x2="712" y2="246" stroke="currentColor" stroke-width="1.5"/>
-        <line x1="712" y1="246" x2="712" y2="418" stroke="currentColor" stroke-width="1.5"/>
-        <line x1="712" y1="418" x2="720" y2="418" stroke="currentColor" stroke-width="1.5"/>
-        <line x1="650" y1="262" x2="716" y2="262" stroke="currentColor" stroke-width="1.5" opacity="0.6"/>
-        <line x1="716" y1="262" x2="716" y2="434" stroke="currentColor" stroke-width="1.5" opacity="0.6"/>
-        <line x1="716" y1="434" x2="720" y2="434" stroke="currentColor" stroke-width="1.5" opacity="0.6"/>
-        <!-- nSLEEP -->
-        <line x1="650" y1="292" x2="680" y2="292" stroke="var(--warn)" stroke-width="2"/>
-        <line x1="680" y1="292" x2="680" y2="200" stroke="var(--warn)" stroke-width="2"/>
-        <line x1="680" y1="200" x2="720" y2="200" stroke="var(--warn)" stroke-width="2" marker-end="url(#aw)"/>
-        <line x1="680" y1="292" x2="680" y2="450" stroke="var(--warn)" stroke-width="2"/>
-        <line x1="680" y1="450" x2="720" y2="450" stroke="var(--warn)" stroke-width="2" marker-end="url(#aw)"/>
-        <text x="600" y="312" fill="var(--warn)" font-size="11">HIGH = drivers awake</text>
-        <!-- I2C devices -->
-        <rect x="380" y="420" width="120" height="50" fill="none" stroke="currentColor" stroke-width="2"/>
-        <text x="440" y="440" text-anchor="middle" font-size="12.5">MPU6050 IMU</text>
-        <text x="440" y="457" text-anchor="middle" opacity="0.8">addr 0x68 · chip Z up</text>
-        <rect x="380" y="490" width="120" height="50" fill="none" stroke="currentColor" stroke-width="2"/>
-        <text x="440" y="510" text-anchor="middle" font-size="12.5">VL53L0X range</text>
-        <text x="440" y="527" text-anchor="middle" opacity="0.8">addr 0x29 · points DOWN</text>
-        <line x1="500" y1="326" x2="470" y2="326" stroke="currentColor" stroke-width="1.5"/>
-        <line x1="470" y1="326" x2="470" y2="420" stroke="currentColor" stroke-width="1.5"/>
-        <line x1="500" y1="342" x2="460" y2="342" stroke="currentColor" stroke-width="1.5" opacity="0.6"/>
-        <line x1="460" y1="342" x2="460" y2="420" stroke="currentColor" stroke-width="1.5" opacity="0.6"/>
-        <line x1="470" y1="470" x2="470" y2="490" stroke="currentColor" stroke-width="1.5"/>
-        <line x1="460" y1="470" x2="460" y2="490" stroke="currentColor" stroke-width="1.5" opacity="0.6"/>
-        <text x="420" y="395" text-anchor="middle" opacity="0.8">I2C bus, 3.3 V, both share SDA/SCL</text>
-        <!-- GND note -->
-        <text x="95" y="330" text-anchor="middle" opacity="0.8">one common GND:</text>
-        <text x="95" y="346" text-anchor="middle" opacity="0.8">battery, ESP32, both drivers</text>
-        <!-- USB warning -->
-        <text x="575" y="392" text-anchor="middle" font-size="11" fill="var(--warn)">USB plugged in for flashing → battery switch OFF</text>
+    <svg viewBox="0 0 900 300" role="img" aria-label="Detail of the hang: the balloon's neck knotted with a short string loop and keyring, a mini carabiner on the gondola's three-string bridle clipped into the ring, the board hanging level with the V prop under its middle and the L/R props behind, prop tips well clear of the balloon skin, coins at the centre for ballast.">
+      <path d="M100,20 Q450,150 800,20" fill="none" stroke="currentColor" stroke-width="2.5"/>
+      <text x="450" y="38" font-size="12" text-anchor="middle" fill="currentColor" opacity="0.8">underside of the balloon (zoomed, 1 m = 1000 px)</text>
+      <!-- neck, knot, loop, ring -->
+      <path d="M444,80 L456,80 L453,96 L447,96 z" fill="currentColor"/>
+      <circle cx="450" cy="100" r="4" fill="currentColor"/>
+      <line x1="450" y1="104" x2="450" y2="110" stroke="currentColor" stroke-width="1.5"/>
+      <circle cx="450" cy="117" r="7" fill="none" stroke="currentColor" stroke-width="3"/>
+      <!-- carabiner -->
+      <rect x="444" y="124" width="12" height="18" rx="5" fill="none" stroke="currentColor" stroke-width="2.5"/>
+      <line x1="456" y1="128" x2="456" y2="138" stroke="var(--paper)" stroke-width="3"/>
+      <line x1="457" y1="128" x2="452" y2="138" stroke="currentColor" stroke-width="1.5"/>
+      <!-- bridle -->
+      <line x1="450" y1="142" x2="330" y2="220" stroke="currentColor" stroke-width="1.2"/>
+      <line x1="450" y1="142" x2="558" y2="220" stroke="currentColor" stroke-width="1.2"/>
+      <line x1="450" y1="142" x2="566" y2="224" stroke="currentColor" stroke-width="1.2"/>
+      <!-- board, bar end, motor, prop -->
+      <rect x="320" y="220" width="258" height="12" fill="var(--paper)" stroke="currentColor" stroke-width="2"/>
+      <rect x="566" y="217" width="12" height="18" fill="currentColor"/>
+      <rect x="578" y="222" width="18" height="9" fill="currentColor"/>
+      <line x1="600" y1="189" x2="600" y2="264" stroke="currentColor" stroke-width="3"/>
+      <!-- V -->
+      <line x1="450" y1="232" x2="450" y2="270" stroke="currentColor" stroke-width="2.5"/>
+      <line x1="412" y1="270" x2="488" y2="270" stroke="currentColor" stroke-width="3"/>
+      <!-- ultrasonic, battery, coins -->
+      <rect x="326" y="232" width="18" height="12" fill="currentColor"/>
+      <line x1="335" y1="244" x2="335" y2="292" stroke="currentColor" stroke-width="1" stroke-dasharray="3 4" opacity="0.6"/>
+      <rect x="360" y="232" width="60" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="4 3"/>
+      <circle cx="475" cy="215" r="5" fill="none" stroke="currentColor" stroke-width="1.5"/>
+      <circle cx="485" cy="215" r="5" fill="none" stroke="currentColor" stroke-width="1.5"/>
+      <!-- labels -->
+      <text x="425" y="104" font-size="11" text-anchor="end" fill="currentColor">three bridle strings, 10-15 cm long:</text>
+      <text x="425" y="118" font-size="11" text-anchor="end" fill="currentColor" opacity="0.8">front-centre, rear-left, rear-right</text>
+      <line x1="443" y1="117" x2="428" y2="136" stroke="currentColor" stroke-width="0.8" opacity="0.7"/>
+      <text x="425" y="140" font-size="11" text-anchor="end" fill="currentColor">keyring on a string loop at the neck knot: stays on the balloon</text>
+      <line x1="444" y1="133" x2="418" y2="154" stroke="currentColor" stroke-width="0.8" opacity="0.7"/>
+      <text x="415" y="158" font-size="11" text-anchor="end" fill="currentColor">mini carabiner on the bridle: "slap it on" = one clip</text>
+      <text x="335" y="212" font-size="11" text-anchor="middle" fill="currentColor">front</text>
+      <text x="572" y="212" font-size="11" text-anchor="middle" fill="currentColor">rear bar (end on)</text>
+      <text x="335" y="258" font-size="11" text-anchor="middle" fill="currentColor">ultrasonic</text>
+      <text x="390" y="262" font-size="11" text-anchor="middle" fill="currentColor">battery</text>
+      <text x="470" y="204" font-size="10.5" text-anchor="middle" fill="currentColor">coins = ballast</text>
+      <text x="450" y="286" font-size="11" text-anchor="middle" fill="currentColor">V prop 3-4 cm under the board on a standoff, blows down</text>
+      <text x="612" y="228" font-size="11" fill="currentColor">L / R prop (behind the bar)</text>
+      <g stroke="var(--dim)" fill="var(--dim)" font-family="IBM Plex Mono, monospace" font-size="12">
+        <line x1="630" y1="66" x2="630" y2="188" marker-start="url(#ahd)" marker-end="url(#ahd)"/>
+        <line x1="624" y1="66" x2="636" y2="66"/><line x1="624" y1="188" x2="636" y2="188"/>
+        <text x="638" y="122" stroke="none">prop tip to skin:</text>
+        <text x="638" y="138" stroke="none">5 cm or more</text>
+        <text x="638" y="154" stroke="none" opacity="0.8">(here ~12 cm)</text>
       </g>
+      <text x="150" y="280" font-size="11.5" fill="currentColor">Level check: hang the finished gondola from a finger through the ring.</text>
+      <text x="150" y="294" font-size="11.5" fill="currentColor">Level both ways? If not, slide the battery or shorten one string.</text>
     </svg>
-    <figcaption>Wiring. Solid signal lines are PWM, faded ones are direction. The battery goes straight to the driver boards' motor supply and through a 3.3 V regulator to the ESP32's 3V3 pin. Never feed the raw 3.7 to 4.2 V cell into the ESP32, and do not use a 5 V boost. Pin numbers follow the firmware; verify each against the board's silkscreen before soldering.</figcaption>
+    <figcaption>The balloon keeps the ring; the gondola keeps the clip. Three strings make the hang stiff enough that motor thrust does not swing the board about, and short enough that the gondola stays tight under the balloon. Trim with coins at the centre until, released at chest height with the motors off, it takes 5 to 10 seconds to reach the floor: about one gram heavy.</figcaption>
   </figure>
 
+  <h2>4. The box: what the hardware team's electronics must do</h2>
+  <div class="callout dim"><strong>The contract, in one list.</strong> The laptop bridge (<code>laptop/control/ble_gondola.py</code>) runs the mixer and the failsafe; the box only has to do these things well.</div>
   <div class="tablewrap"><table>
-    <tr><th>Function</th><th>ESP32-C3 GPIO</th><th>Driver pin</th><th>Note</th></tr>
-    <tr><td>Motor L, PWM / DIR</td><td class="num">0 / 4</td><td>Board A, AIN1 / AIN2</td><td>motor on AO1, AO2</td></tr>
-    <tr><td>Motor R, PWM / DIR</td><td class="num">1 / 5</td><td>Board A, BIN1 / BIN2</td><td>motor on BO1, BO2</td></tr>
-    <tr><td>Motor S, PWM / DIR</td><td class="num">3 / 20</td><td>Board B, AIN1 / AIN2</td><td>motor on AO1, AO2</td></tr>
-    <tr><td>Motor V, PWM / DIR</td><td class="num">10 / 21</td><td>Board B, BIN1 / BIN2</td><td>motor on BO1, BO2</td></tr>
-    <tr><td>Driver enable, both boards</td><td class="num">8</td><td>STBY, also marked EEP or nSLEEP</td><td>shares the onboard LED: lit = disarmed</td></tr>
-    <tr><td>I2C SDA / SCL</td><td class="num">6 / 7</td><td>—</td><td>MPU6050 at 0x68, VL53L0X at 0x29</td></tr>
-    <tr><td>Do not use</td><td class="num">2, 9, 18, 19</td><td>—</td><td>2 and 9 are boot strapping pins, 18 and 19 are USB</td></tr>
-    <tr><td>Battery voltage</td><td class="num">none</td><td>—</td><td>no pin left; telemetry reports -1</td></tr>
+    <tr><th>Requirement</th><th>Detail</th><th>Checked by</th></tr>
+    <tr><td>Bluetooth LE device <code>BalloonRobot</code></td><td>command characteristic <code>…9001</code> (write without response), telemetry <code>…9002</code> (notify)</td><td><code>ble_gondola --probe</code> connects</td></tr>
+    <tr><td>Motor command</td><td><code>MOTORS c d e f</code>, percent −100…100, sign = direction; <code>STOP</code>; single letters <code>C 30</code>. Percent 30 = 30 % duty. Up to 20 lines a second.</td><td><code>--motor C 30</code>, teleop</td></tr>
+    <tr><td>Firmware timeout</td><td><span class="tag need">asked</span> STOP by itself after 500 ms without a command. Today only the laptop stops the motors.</td><td>kill the bridge while motors run</td></tr>
+    <tr><td>IMU line</td><td><code>A:ax,ay,az;G:gx,gy,gz;T:44.5</code>, gyro in deg/s, 20 or more lines a second, chip flat with Z up</td><td><code>--probe</code> shows <code>gz_rad</code>, positive when turned counter-clockwise</td></tr>
+    <tr><td>Ultrasonic (optional)</td><td>append <code> alt=87.3</code> (cm, −1 for no echo) to the same line</td><td><code>curl http://127.0.0.1:5008/status</code> shows <code>alt</code> in metres</td></tr>
+    <tr><td>Motor drivers</td><td>little voltage drop (DRV8833, TB6612, MX1508). An L298N drops ~2 V: on a 3.7 V cell the motors see 1.7 V.</td><td>motors start by 10 % duty</td></tr>
+    <tr><td>Power</td><td>one battery, one common ground, a physical switch within reach, a 470-1000 µF capacitor across the battery so four motors starting together do not reset the board</td><td>full teleop run, tied down</td></tr>
   </table></div>
 
-  <div class="callout"><strong>The single most common "nothing spins".</strong> The DRV8833's STBY pin must be pulled high or the chip sleeps. Some boards label it EEP or nSLEEP. It is tied to GPIO 8 here so the firmware can cut power hard; if a motor test fails, check that pin first, then the motor supply, then the shared ground.</div>
-
-  <h3>PWM details, for whoever wires the drivers</h3>
-  <ul>
-    <li>PWM at 25 kHz, 10 bit, above hearing. Duty is clamped to 50% in the mixer; the laptop caps it further.</li>
-    <li>Positive value: DIR low, duty = value. Negative value: DIR high, duty = 1 − |value|. That is the DRV8833 fast-decay and slow-decay convention; it is handled in firmware.</li>
-    <li>Every motor ramps by at most 5% per 20 ms tick, so a full stop to 50% takes 0.2 s. This keeps current spikes under the protected cell's cut-off.</li>
-    <li>Add 0.1 µF ceramic capacitors across each motor's terminals to tame brush noise on the I2C bus.</li>
-  </ul>
-
-  <h2>4. Parts and weight budget</h2>
+  <h2>5. Weight budget</h2>
+  <p>The balloon at 1.10 m lifts about 630 g with good helium and about 525 g with a party-tank blend, after its own skin. Inflated full (1.22 m): 880 / 735 g. These are typical grams; weigh the real thing.</p>
   <div class="tablewrap"><table>
-    <tr><th>Part</th><th class="num">Qty</th><th class="num">≈ grams</th><th>Status</th><th>Note</th></tr>
-    <tr><td>48" white latex weather balloon, Galpada</td><td class="num">1 + 2 spare</td><td class="num">50</td><td><span class="tag have">have</span></td><td>fragile; inflate to 1.10 m, not full</td></tr>
-    <tr><td>8520 coreless motor + 75 mm prop</td><td class="num">4</td><td class="num">16</td><td><span class="tag have">have</span></td><td>2 CW + 2 CCW props</td></tr>
-    <tr><td>DRV8833 dual H-bridge board</td><td class="num">2</td><td class="num">4</td><td><span class="tag have">have</span></td><td>headers are only pushed in: solder them</td></tr>
-    <tr><td>ESP32-C3 SuperMini</td><td class="num">1</td><td class="num">3</td><td><span class="tag have">have</span></td><td>blimpy-9910 is flashed and on the hotspot</td></tr>
-    <tr><td>MPU6050 GY-521 IMU</td><td class="num">1</td><td class="num">2</td><td><span class="tag have">have</span></td><td>mount flat, chip Z up</td></tr>
-    <tr><td>VL53L0X rangefinder</td><td class="num">1</td><td class="num">1</td><td><span class="tag have">have</span></td><td>optional for v1, points down</td></tr>
-    <tr><td>LiPo 3.7 V 1800 mAh, EEMB 963450</td><td class="num">1</td><td class="num">35</td><td><span class="tag have">have</span></td><td>uncharged; 50 to 70 min runtime</td></tr>
-    <tr><td>Capacitors: 1000 µF, 100 µF ×2, 0.1 µF ×8</td><td class="num">set</td><td class="num">5</td><td><span class="tag have">have</span></td><td></td></tr>
-    <tr><td>SPST toggle switch MTS-101</td><td class="num">1</td><td class="num">3</td><td><span class="tag have">have</span></td><td>use one, weight</td></tr>
-    <tr><td>Small protoboard, frame, harness, foam tape, wire</td><td class="num">—</td><td class="num">40–80</td><td><span class="tag need">partly</span></td><td>frame from carbon rod, balsa or foam board</td></tr>
-    <tr><td>3.3 V LDO regulator, ≥ 500 mA</td><td class="num">1</td><td class="num">1</td><td><span class="tag need">need</span></td><td>HT7833, XC6220 or ME6211 module; MCP1700 is too small</td></tr>
-    <tr><td>TP4056 USB-C 1S charger board</td><td class="num">1</td><td class="num">off-board</td><td><span class="tag need">need</span></td><td>charging happens on the bench</td></tr>
-    <tr><td>JST-PH 2.0 mm kit, 26 to 28 AWG silicone wire</td><td class="num">1</td><td class="num">—</td><td><span class="tag need">need</span></td><td></td></tr>
-    <tr><td>Soft foam mounting tape</td><td class="num">1</td><td class="num">—</td><td><span class="tag need">need</span></td><td>under every motor; vibration is the noise</td></tr>
-    <tr><th>Gondola total</th><th></th><th class="num">≈ 120–160</th><th></th><th>budget 250, lift 640</th></tr>
+    <tr><th>Part</th><th class="num">≈ grams</th><th>Note</th></tr>
+    <tr><td>Breadboard, half / full size</td><td class="num">40 / 85</td><td>the biggest weight after the battery; half is enough</td></tr>
+    <tr><td>Bluetooth board (Nano-class / ESP32 devkit / Uno-class)</td><td class="num">5 / 10 / 25</td><td></td></tr>
+    <tr><td>Two motor drivers</td><td class="num">5 or 55</td><td>DRV8833 / TB6612 pair, or two L298N with heatsinks</td></tr>
+    <tr><td>IMU (MPU6050 GY-521 style)</td><td class="num">2</td><td></td></tr>
+    <tr><td>Four motors + props (8520 + 75 mm)</td><td class="num">20</td><td></td></tr>
+    <tr><td>Battery: 1S LiPo 1800 mAh / 9 V block / 2S 1000 mAh</td><td class="num">35 / 45 / 55</td><td></td></tr>
+    <tr><td>Wires, headers, switch</td><td class="num">15-25</td><td>breadboard jumpers add up</td></tr>
+    <tr><td>Frame, foam tape, glue, bridle, clip</td><td class="num">30-50</td><td></td></tr>
+    <tr><td>Ultrasonic (optional)</td><td class="num">9</td><td></td></tr>
+    <tr><td>Ballast</td><td class="num">0-40</td><td>coins at the centre</td></tr>
+    <tr><th>Total</th><th class="num">150-330</th><th>lift 630 (525) at 1.10 m</th></tr>
   </table></div>
-  <p>The lift margin is large. Do not chase grams; chase balance and rigidity. A floppy frame turns motor thrust into wobble, and the heading estimator reads wobble as noise.</p>
+  <div class="callout ok"><strong>Rule.</strong> Weigh the complete gondola with battery and ballast. Under 450 g: inflate to 1.10 m as planned. 450-700 g: inflate to the full 1.22 m and set <code>PHYS D = 1.22</code>. Over 700 g: cut weight first (small protoboard instead of the breadboard, DRV8833 instead of L298N, one battery). Write the weight into <code>PHYS M_GONDOLA</code>.</div>
 
-  <h2>5. Build sequence</h2>
-  <p>Bench first, balloon last. Everything up to step 8 happens on a table with the gondola tied down. The one rule: never plug USB into the ESP32 while the battery switch is on.</p>
-
+  <h2>6. Build order</h2>
+  <p>Bench first, balloon last. Each step is a go / no-go for the next. Commands run from the repo root with Bluetooth on; README section 3 has the same bench list in more detail.</p>
   <ol class="steps">
-    <li><strong>Solder the driver headers and the power tree</strong>
-      <p>Solder the header pins on both DRV8833 boards; pushed-in pins are the reason motor tests fail intermittently. Wire battery + through the switch to a small bus: from there to VM on both driver boards and to the regulator input. The 1000 µF goes across the battery after the switch, a 100 µF across each board's VM and GND. Regulator output to the ESP32's 3V3 pin, not the 5V pin. One ground bus shared by everything.</p>
+    <li><strong>The box talks before anything is built around it</strong>
+      <p>Power the breadboard, then on the laptop:</p>
+      <pre>python -m laptop.control.ble_gondola --probe</pre>
+      <p>It must connect to BalloonRobot and print an IMU line with a parsed dict (<code>gz_rad</code> present) 20 or more times a second. Turn the board counter-clockwise by hand: gz positive. If negative, set <code>GYRO_SIGN = -1</code> in <code>config.BLE</code>.</p>
     </li>
-    <li><strong>Charge the cell and check the rail</strong>
-      <p>Charge on the TP4056 until its light changes. Switch on with nothing else connected and measure: battery 3.9 to 4.2 V at VM, 3.3 V at the ESP32 pin. If the regulator sags below 3.2 V when the ESP32 boots, it is too small.</p>
+    <li><strong>Motors spin, props off</strong>
+      <pre>python -m laptop.control.ble_gondola --motor C 30</pre>
+      <p>Two seconds of motor C at 30 %. Repeat for D, E, F and write down which physical motor each letter is. <code>--motor C -30</code> must reverse it.</p>
     </li>
-    <li><strong>Confirm the board is alive on the network</strong>
-      <p>Battery off, USB in. Run the serial monitor and watch it join the hotspot and print its IP and name. Then teleop from the laptop:</p>
-      <pre>python -m laptop.control.ble_gondola   # terminal 1: connects to BalloonRobot
-python -m laptop.control.teleop        # terminal 2</pre>
-      <p>LED fast blink turns to slow blink when commands arrive. SPACE arms: LED goes off. Ctrl+C: LED back on within half a second. That is the failsafe, and it already works on this board.</p>
+    <li><strong>Fill in the map</strong>
+      <p>In <code>laptop/config.py</code>, <code>BLE["MOTORS"]</code>: which letter is L (rear left), R (rear right), S (sideways), V (vertical). Label the motors with tape.</p>
     </li>
-    <li><strong>One motor, then all four</strong>
-      <p>Wire motor L only on board A, STBY to GPIO 8. Battery on, USB out. Arm, press <code>w</code>: it spins. Press <code>s</code>: it reverses. No spin means STBY, then VM, then ground, in that order. Then add the rest. Teleop prints the four duties on screen; each key should move exactly the motor the layout drawing says. If a motor runs backwards, swap its two output wires at the driver.</p>
+    <li><strong>Build the frame around the board</strong>
+      <p>Rear bar with L and R, S on the right edge, V under the middle on a standoff, IMU flat, battery under the left half, three bridle strings to a clip (sections 2 and 3). Props on now; balance each blade on a pin and sand the heavy tip until it stops settling to one side.</p>
     </li>
-    <li><strong>Mount the IMU and check the sign</strong>
-      <p>Glue the MPU6050 flat to the gondola with its chip facing up and its printed X arrow pointing forward. Set <code>HAS_IMU 1</code> in the firmware config, reflash, keep the gondola still for two seconds after boot. Rotate it counter-clockwise by hand seen from above: the telemetry yaw must increase. If it decreases, the chip is upside down.</p>
+    <li><strong>Teleop on the bench, gondola tied down</strong>
+      <pre>python -m laptop.control.ble_gondola       # terminal 1: the bridge, leave it running
+python -m laptop.control.teleop            # terminal 2: SPACE arms</pre>
+      <p>Hold the gondola still for 3 s, SPACE, then: <code>w</code> = L and R blow backward (gondola wants forward); <code>s</code> = both reverse; <code>j</code> = S blows right (gondola wants left); <code>q</code> = V blows down (gondola wants up); <code>a</code> = R harder than L and telemetry yaw rises. A motor pushing the wrong way: flip its <code>SIGN</code> to −1 in <code>config.BLE</code>.</p>
     </li>
-    <li><strong>Build the frame</strong>
-      <p>A light cross: a 25 cm rear bar carrying L and R at its ends with thrust lines forward and parallel, a central body for the electronics, the S motor bolted transverse at the body's centre, and V under the middle with its prop clear by at least one prop radius. Put the battery, the heaviest part, at the centre so the centre of mass sits under the harness point. Every motor sits on soft foam tape; it is the difference between silent and buzzing.</p>
+    <li><strong>Failsafe</strong>
+      <p>Ctrl+C the teleop: everything stops within half a second. Then kill the bridge while the motors run: if they keep spinning, the firmware has no timeout yet (section 4). Until it has one, someone stays on the battery switch.</p>
     </li>
-    <li><strong>Balance the props and weigh the gondola</strong>
-      <p>Spin each prop on a pin; sand the heavy blade's tip until it stops settling to one side. Weigh the finished gondola with battery; write the number on it. It goes into the simulator constants later.</p>
+    <li><strong>Weigh it</strong>
+      <p>Kitchen scale, with battery and ballast. <code>PHYS M_GONDOLA</code> (kg) and the motor spacing into <code>PHYS</code>, both with the date into <code>calib/MEASUREMENTS.md</code>.</p>
     </li>
-    <li><strong>Full bench run, tied down</strong>
-      <p>Tether the gondola to something heavy. Arm, run each axis to the 50% cap, then Ctrl+C the teleop and watch everything stop within half a second. Check the battery voltage at VM during the run: below 3.5 V under load means the protection board is clamping, and the throttle cap must come down.</p>
+    <li><strong>Measure thrust</strong>
+      <p>One motor taped upright on the scale, prop blowing up and away from the pan. Teleop <code>w</code> ×3 / ×4 / ×5 (30 / 40 / 50 %), read grams: expect roughly 4.5 / 8 / 12 g for an 8520. <code>T_MAX = 9.81e-3 × grams_at_50 / 0.25</code> newtons. Then <code>s</code> ×5 for reverse: <code>REV_EFF = reverse / forward</code>.</p>
     </li>
-    <li><strong>Inflate the balloon</strong>
-      <p>Inflate slowly to a circumference of 3.46 m, which is 1.10 m across. Tie off, then tie a light harness of two or three strings around the neck. The envelope is thin: no rings, no watches, no rough tables. Optional Hi-Float gel slows the leak for a long demo day.</p>
+    <li><strong>Inflate</strong>
+      <p>To the size the weight allows: tape round the fattest part 3.46 m (1.10 m) or 3.83 m (1.22 m). Tie off, string loop and keyring round the knot, neck string short.</p>
     </li>
-    <li><strong>Hang the gondola and trim</strong>
-      <p>Hang the gondola from the neck harness as close under the balloon as the strings allow, level. Add ballast, washers or putty on the gondola centre, until the whole thing sinks very slowly with the motors off: about one gram heavy. It will feel too heavy; it is not. The vertical motor holds it up with a few percent duty and the trim is relearned automatically.</p>
+    <li><strong>Clip the gondola on</strong>
+      <p>Board level, every prop tip 5 cm or more from the skin. If not, lengthen the bridle strings a little.</p>
     </li>
-    <li><strong>First flight, hover only</strong>
-      <p>Cameras calibrated (section 6), balloon in view. Start the pilot, arm. The balloon does a few short pushes to learn which way it faces, then holds position. Let it hover for a minute before anyone says "follow me".</p>
+    <li><strong>Trim</strong>
+      <p>Motors off. Coins or blu-tack at the gondola centre until, released at chest height, it takes 5-10 s to reach the floor. About one gram heavy. It will feel too heavy; it is not.</p>
+    </li>
+    <li><strong>Measure the hang</strong>
+      <p>Tape from the floor to the balloon's equator, to the motor plane, and to the ultrasonic lens if fitted. <code>ARM_BELOW</code> = equator minus motor plane; <code>TOF_BELOW</code> = equator minus lens; the inflated diameter into <code>D</code>. All into <code>PHYS</code> and <code>calib/MEASUREMENTS.md</code>.</p>
+    </li>
+    <li><strong>Rerun the simulator with the real numbers</strong>
+      <pre>python tools/scenarios.py --seeds 3
+python tools/control_test.py</pre>
+    </li>
+    <li><strong>First flight: hover only</strong>
+      <pre>python -m laptop.vision.mono --auto-calib --show     # terminal 1: the room camera
+python -m laptop.control.ble_gondola                 # terminal 2: the bridge
+python -m laptop.control.pilot --no-voice            # terminal 3: SPACE arms; type: hover</pre>
+      <p>On arming it makes a few short pushes to learn which way it faces, then holds position. Let it hover a minute before anyone says "follow me". Someone stands next to the battery switch the whole time.</p>
     </li>
   </ol>
 
-  <h2>6. The camera rig in the room</h2>
-  <p>The balloon carries no camera. Two identical cameras stand in the room, look down at the demo area, and both see one printed tag on the floor that defines where "zero" is. Phones with DroidCam work now; Raspberry Pi Camera Module 3 pairs later. The scripts do not care which.</p>
-
+  <h2>7. The room: the half of the robot that stays on the ground</h2>
   <figure class="sheet">
-    <svg viewBox="0 0 900 420" role="img" aria-label="Room plan: two cameras 1.5 to 2 metres apart at the edge of a 6.5 by 4 metre demo area, both aimed at the floor tag near the middle; the judges' table on the far side; balloon and person inside.">
-      <rect x="120" y="50" width="660" height="320" fill="none" stroke="currentColor" stroke-width="2.5"/>
-      <text x="450" y="40" font-size="12" text-anchor="middle" fill="currentColor">demo area ≈ 6.5 × 4 m (measure and put it in venues/default.json)</text>
-      <!-- tag -->
-      <rect x="330" y="200" width="22" height="22" fill="currentColor"/>
-      <text x="341" y="242" font-size="11.5" text-anchor="middle" fill="currentColor">floor tag, id 0, 150 mm</text>
+    <svg viewBox="0 0 900 420" role="img" aria-label="Room plan: the laptop on a table at one edge of the demo area, the mat board on the floor 2 m in front of it, the balloon 3.5 m from the laptop, the person next to it, and the judges' table on the far side.">
+      <rect x="120" y="40" width="585" height="360" fill="none" stroke="currentColor" stroke-width="2.5"/>
+      <text x="412" y="30" font-size="12" text-anchor="middle" fill="currentColor">demo area ≈ 6.5 × 4 m (1 m = 90 px; measure yours into venues/default.json)</text>
+      <!-- mat -->
+      <rect x="330" y="200" width="32" height="32" fill="currentColor"/>
+      <text x="346" y="250" font-size="11.5" text-anchor="middle" fill="currentColor">mat board, 0.35 m square</text>
+      <text x="346" y="264" font-size="11" text-anchor="middle" fill="currentColor" opacity="0.8">tag 0 = origin, same way up every time</text>
       <g stroke="var(--dim)" fill="var(--dim)" font-family="IBM Plex Mono, monospace" font-size="11.5">
-        <line x1="341" y1="211" x2="420" y2="211" marker-end="url(#ahd)"/><text x="426" y="215" stroke="none">+X</text>
-        <line x1="341" y1="211" x2="341" y2="140" marker-end="url(#ahd)"/><text x="348" y="140" stroke="none">+Y (tag top edge)</text>
+        <line x1="346" y1="216" x2="420" y2="216" marker-end="url(#ahd)"/><text x="426" y="220" stroke="none">+X</text>
+        <line x1="346" y1="216" x2="346" y2="150" marker-end="url(#ahd)"/><text x="352" y="150" stroke="none">+Y (tag top edge)</text>
       </g>
-      <!-- cameras -->
-      <g fill="currentColor">
-        <rect x="150" y="330" width="26" height="18"/><path d="M176,334 L190,328 L190,346 L176,340 z"/>
-        <rect x="150" y="80" width="26" height="18"/><path d="M176,84 L190,78 L190,96 L176,90 z"/>
-      </g>
-      <text x="163" y="368" font-size="11.5" text-anchor="middle" fill="currentColor">camera A</text>
-      <text x="163" y="70" font-size="11.5" text-anchor="middle" fill="currentColor">camera B</text>
-      <path d="M190,337 L341,211" stroke="currentColor" stroke-width="1" stroke-dasharray="5 4"/>
-      <path d="M190,87 L341,211" stroke="currentColor" stroke-width="1" stroke-dasharray="5 4"/>
-      <path d="M190,337 L560,60 M190,337 L700,340" stroke="currentColor" stroke-width="0.8" opacity="0.35"/>
-      <path d="M190,87 L560,360 M190,87 L700,80" stroke="currentColor" stroke-width="0.8" opacity="0.35"/>
+      <!-- laptop -->
+      <rect x="140" y="324" width="26" height="14" fill="currentColor"/><path d="M166,326 L178,320 L178,342 L166,336 z" fill="currentColor"/>
+      <text x="155" y="362" font-size="11.5" text-anchor="middle" fill="currentColor">laptop webcam</text>
+      <text x="155" y="376" font-size="11" text-anchor="middle" fill="currentColor" opacity="0.8">on a table, lid still</text>
+      <path d="M178,331 L346,216" stroke="currentColor" stroke-width="1" stroke-dasharray="5 4"/>
+      <path d="M178,331 L560,60 M178,331 L690,330" stroke="currentColor" stroke-width="0.8" opacity="0.35"/>
       <g stroke="var(--dim)" fill="var(--dim)" font-family="IBM Plex Mono, monospace" font-size="11.5">
-        <line x1="100" y1="98" x2="100" y2="330" marker-start="url(#ahd)" marker-end="url(#ahd)"/>
-        <text x="92" y="218" text-anchor="end" stroke="none">1.5–2 m apart</text>
+        <line x1="100" y1="331" x2="100" y2="216" marker-start="url(#ahd)" marker-end="url(#ahd)"/>
+        <text x="92" y="278" text-anchor="end" stroke="none">2-3 m</text>
       </g>
-      <!-- balloon & person -->
-      <circle cx="470" cy="230" r="44" fill="none" stroke="currentColor" stroke-width="2"/>
-      <text x="470" y="234" font-size="11.5" text-anchor="middle" fill="currentColor">balloon</text>
-      <circle cx="590" cy="250" r="12" fill="none" stroke="currentColor" stroke-width="2"/>
-      <text x="590" y="280" font-size="11.5" text-anchor="middle" fill="currentColor">person</text>
+      <!-- balloon and person -->
+      <circle cx="470" cy="220" r="50" fill="none" stroke="currentColor" stroke-width="2"/>
+      <text x="470" y="224" font-size="11.5" text-anchor="middle" fill="currentColor">balloon, 3-5 m</text>
+      <text x="470" y="238" font-size="11" text-anchor="middle" fill="currentColor" opacity="0.8">from the camera</text>
+      <circle cx="600" cy="250" r="12" fill="none" stroke="currentColor" stroke-width="2"/>
+      <text x="600" y="280" font-size="11.5" text-anchor="middle" fill="currentColor">person, 1 m off the walls</text>
       <!-- judges -->
-      <rect x="690" y="150" width="70" height="120" fill="none" stroke="currentColor" stroke-width="2"/>
-      <text x="725" y="215" font-size="11.5" text-anchor="middle" fill="currentColor">judges'</text>
-      <text x="725" y="230" font-size="11.5" text-anchor="middle" fill="currentColor">table</text>
-      <text x="450" y="400" font-size="12" text-anchor="middle" fill="currentColor" opacity="0.8">both cameras must see the whole tag and most of the floor; a vent blowing across the area will beat the motors</text>
+      <rect x="640" y="140" width="60" height="110" fill="none" stroke="currentColor" stroke-width="2"/>
+      <text x="670" y="192" font-size="11.5" text-anchor="middle" fill="currentColor">judges'</text>
+      <text x="670" y="206" font-size="11.5" text-anchor="middle" fill="currentColor">table</text>
+      <text x="412" y="392" font-size="11.5" text-anchor="middle" fill="currentColor" opacity="0.85">ceiling 2.5 m or more · no vent or open door blowing across the area (a 1 m/s gust beats the motors)</text>
     </svg>
-    <figcaption>Room plan. Cameras go on stands about 1.8 m high at one edge, 1.5 to 2 m apart, tilted down so the tag sits in the lower half of each picture. They need not be a rigid pair; moving one only costs a sixty-second re-calibration of that camera.</figcaption>
+    <figcaption>The laptop webcam is the only camera (calibrated once, <code>calib/laptop_intrinsics.npz</code>). The mat board is surveyed once (<code>calib/mat.json</code>) and just dropped on the floor 2-3 m in front of it; auto-calibration solves the camera's position in 3 s if the lid stays still and nobody stands in front of the board. The whole balloon must be inside the picture: if its top is cut off, tilt the lid back a touch while keeping the mat in the lower half of the frame.</figcaption>
   </figure>
 
-  <ul>
-    <li><strong>Lock the lens.</strong> Camera Module 3 autofocuses; both cameras must run manual focus, fixed exposure, gain and white balance, with the same settings. The streaming command in the README already sets them. Phones: lock focus and exposure in the camera app.</li>
-    <li><strong>Network.</strong> Everything joins the laptop's hotspot, never the hackathon WiFi. Pi cameras prefer an Ethernet cable to the laptop.</li>
-    <li><strong>Calibration ritual, per camera.</strong> Once ever: checkerboard intrinsics, one minute of waving the printed board. Every time a camera is placed: point it at the floor tag, run extrinsics, sixty seconds, keep the camera still. Then the tape-measure test: stand on a known spot, check the printed position.</li>
-    <li><strong>Balloon fine-tune, once the real balloon exists.</strong> Fifty frames of it in the demo light, labelled by accepting the boxes the model already draws, then a three-minute training run. This is what makes the detector confident on a translucent white balloon with fins and a gondola.</li>
-  </ul>
+  <h2>8. Every number to measure, and where it goes</h2>
+  <div class="tablewrap"><table>
+    <tr><th>Measure</th><th>Put it in</th><th>Used by</th></tr>
+    <tr><td>balloon diameter after inflating</td><td><code>PHYS D</code></td><td>camera range to the balloon, sim mass and drag</td></tr>
+    <tr><td>gondola weight with battery and ballast</td><td><code>PHYS M_GONDOLA</code></td><td>sim tilt, estimator prediction</td></tr>
+    <tr><td>L to R axis spacing</td><td><code>PHYS MOTOR_SPACING</code></td><td>sim yaw authority</td></tr>
+    <tr><td>equator to motor plane</td><td><code>PHYS ARM_BELOW</code></td><td>sim tilt</td></tr>
+    <tr><td>equator to ultrasonic lens</td><td><code>PHYS TOF_BELOW</code></td><td>height = alt + TOF_BELOW</td></tr>
+    <tr><td>grams at 50 % duty, forward and reverse</td><td><code>PHYS T_MAX</code>, <code>PHYS REV_EFF</code></td><td>estimator, sim, braking</td></tr>
+    <tr><td>which letter is which motor, and its sign</td><td><code>BLE MOTORS</code>, <code>BLE SIGN</code></td><td>the bridge</td></tr>
+    <tr><td>gyro sign, ultrasonic units</td><td><code>BLE GYRO_SIGN</code>, <code>BLE ALT_UNITS</code></td><td>the bridge</td></tr>
+    <tr><td>walls, table, judges' spot</td><td><code>venues/default.json</code></td><td>avoidance, go-to</td></tr>
+  </table></div>
+  <p>Every measured value also gets a dated row in <code>calib/MEASUREMENTS.md</code>. After changing PHYS, run <code>python tools/scenarios.py --seeds 3</code> and <code>python tools/control_test.py</code>.</p>
 
-  <h2>7. Before the first flight, in one place</h2>
+  <h2>9. Before the first flight, in one place</h2>
   <div class="callout ok"><strong>Go / no-go.</strong>
     <ul>
-      <li>Battery switch off whenever USB is plugged in.</li>
-      <li>STBY on both driver boards wired to GPIO 8; LED lit means motors are disabled.</li>
+      <li><code>ble_gondola --probe</code> shows IMU lines at 20+ per second, gz positive when turned counter-clockwise.</li>
       <li>Each teleop key moves exactly the motor the plan view says, in the direction it says.</li>
-      <li>Ctrl+C on the laptop stops all motors within half a second.</li>
-      <li>Telemetry yaw increases when the gondola is turned counter-clockwise by hand.</li>
-      <li>Every motor on foam tape, props balanced, nothing touches a prop.</li>
-      <li>Balloon at 1.10 m, gondola level and tight under it, trimmed about one gram heavy.</li>
-      <li>Both cameras calibrated today, tag flat on the floor, tape-measure test within a hand's width.</li>
-      <li>Demo area away from vents and doors.</li>
+      <li>Ctrl+C on the teleop stops every motor within half a second; the firmware timeout is confirmed, or a person is on the switch.</li>
+      <li>Every motor on foam tape, props balanced, nothing within 3 cm of a prop disc.</li>
+      <li>Gondola weighed, PHYS updated, the scenario suite passes.</li>
+      <li>Balloon plain white, at the diameter written in PHYS, ring on the neck.</li>
+      <li>Gondola hangs level, every prop tip 5 cm or more from the skin, trimmed about one gram heavy.</li>
+      <li>Room: ceiling 2.5 m or more, no vents, the laptop webcam sees the mat and the whole balloon.</li>
+      <li>Battery switch reachable, and someone standing next to it.</li>
     </ul>
   </div>
-  <p>When the hardware is done, three numbers go back into the software: the measured gondola weight, the measured motor spacing, and the measured inflated diameter. They live at the top of the simulator's balloon class and in the vision config, and the test suite is re-run after changing them.</p>
+
+  <h2>10. Ask the hardware team</h2>
+  <ul>
+    <li><strong>Command timeout in the firmware:</strong> no command for 500 ms means STOP. Today the laptop is the only failsafe; if that process dies the last percentages keep running.</li>
+    <li><strong>Which motor drivers:</strong> an L298N drops about 2 V. On a 3.7 V cell the motors barely turn; either a 7.4 V battery with motors rated for it, or a DRV8833 / TB6612 / MX1508 board.</li>
+    <li><strong>Percent to PWM:</strong> 30 should mean 30 % duty. A minimum or a curve in the firmware is fine if the software side knows (<code>DUTY_MIN</code>, <code>T_MAX</code>).</li>
+    <li><strong>IMU line:</strong> keep <code>A:…;G:…;T:…</code> at 20+ per second, gyro in deg/s; append <code> alt=87.3</code> when the ultrasonic is fitted.</li>
+    <li><strong>One battery, one ground, one switch,</strong> and a bulk capacitor so a four-motor start does not reset the board.</li>
+    <li><strong>Bluetooth drops</strong> were seen on the bench. The bridge reconnects and its last word is STOP; the firmware timeout is what makes a drop safe.</li>
+  </ul>
 </main>

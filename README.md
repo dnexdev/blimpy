@@ -20,6 +20,7 @@ tools/               scenarios.py · sim_test.py (--ble) · ble_test.py · behav
                      webcam_test.py · balloon_eval.py · vision_check.py (go/no-go) · positioning_eval.py (sessions vs truth)
 calib/               <name>_intrinsics.npz (once) and <name>_extrinsics.npz (every placement)
 venues/              default.json: the room (arena, obstacles, places). Committed; config.py exports it as ARENA / OBSTACLES / JUDGES_XY
+docs/                ROBOT_BUILD.md: how to build the robot (what the code assumes: balloon, gondola, motors, hang, room) · build_blueprint.html: the same with drawings
 data/positioning/    recorded sessions (gitignored): <ts>_<tag>[_name]/session.json + log.jsonl
 ```
 
@@ -456,6 +457,9 @@ rpicam-vid -t 0 --width 1280 --height 720 --framerate 30 --codec h264 --inline -
 ```
 
 ## 3. Real gondola — bench checklist (in this order)
+
+**Building the airframe?** [docs/ROBOT_BUILD.md](docs/ROBOT_BUILD.md) is the physical design read out of the code (balloon size,
+motor layout, IMU orientation, the clip that hangs the gondola, weight budget, build order); `docs/build_blueprint.html` is the same with drawings.
 
 1. Bluetooth on, gondola powered. `python -m laptop.control.ble_gondola --probe`: it must connect to `BalloonRobot` and
    print IMU lines with the parsed dict next to each. Set `config.BLE` `IMU_FIELDS` / `GYRO_UNITS` until the dict shows
