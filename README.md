@@ -273,6 +273,8 @@ The simulated gondola (eye + ultrasonic, walking person, live plot) behind the B
 cloud voice. One command in a NEW PowerShell window (the key is in the environment):
 ```powershell
 python tools/rehearse.py                 # SPACE arms. Then talk: "Blimpy, follow me", "turn left", "stop", "set a timer for one minute", "what do you see"
+python tools/rehearse.py --person real   # YOU are the person: laptop webcam + mat board track you (section 3a), the balloon is virtual
+                                         # -> walk the room and watch it follow on the plot. Also the fallback demo if the hardware dies.
 python tools/rehearse.py --relative      # pretend there is no room camera (eye + ultrasonic only)
 python tools/rehearse.py -- --voice local    # offline voice (whisper + ollama, v = push-to-talk)
 python tools/omni_sim_test.py [--relative]   # the same chain, automated with spoken wav commands: 12 checks, ~2 min, ~8 cloud calls

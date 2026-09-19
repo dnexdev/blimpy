@@ -55,6 +55,40 @@ def test_failsafe():
         proc.terminate(); tel.sock.close(); cmd.sock.close(); time.sleep(0.5)
 
 
+def test_real_person():
+    """--person real: the sim publishes person=None until fixes arrive on 5017, tracks them, drops them 1.5 s after the last."""
+    import json, socket
+    p = subprocess.Popen([sys.executable, "-m", "laptop.control.ble_gondola", "--fake", "--sim", "--person", "real", "--no-http"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+    time.sleep(2.5)
+    rx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); rx.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    rx.bind(("0.0.0.0", 5007)); rx.settimeout(0.05)
+    tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+    def sample(secs):
+        got, t0 = [], time.time()
+        while time.time() - t0 < secs:
+            try:
+                d, _ = rx.recvfrom(2048); got.append(json.loads(d).get("person"))
+            except socket.timeout:
+                pass
+        return got
+    try:
+        before = sample(1.0)
+        for _ in range(20):
+            tx.sendto(json.dumps({"t": int(time.time() * 1000), "balloon": None, "person": [1.5, -0.4, 1.1], "person_id": 1,
+                                  "src": "mono", "lost": None}).encode(), ("127.0.0.1", 5017))
+            time.sleep(0.05)
+        during = sample(1.0); after = sample(2.5)
+    finally:
+        p.terminate(); rx.close(); tx.close()
+    ok = (bool(before) and all(x is None for x in before) and any(x and abs(x[0] - 1.5) < 0.2 for x in during)
+          and bool(after[-5:]) and all(x is None for x in after[-5:]))
+    print(f"[real person] none before {sum(x is None for x in before)}/{len(before)}, tracked {sum(bool(x) for x in during)}/{len(during)}, "
+          f"lost after {sum(x is None for x in after[-5:])}/5  {'OK' if ok else 'FAIL'}")
+    return ok
+
+
 def test_follow_walk(seconds=45):
     proc = start_fake("--person", "walk", "--psi0", "-2.0")
     state_in, tel_in, cmd_out = UdpJson(STATE_PORT), UdpJson(TELEM_PORT), UdpJson()
@@ -102,5 +136,6 @@ def test_follow_walk(seconds=45):
 if __name__ == "__main__":
     ok1 = test_failsafe()
     ok2 = test_follow_walk()
-    print("PASS" if ok1 and ok2 else "FAIL")
+    ok3 = test_real_person()
+    print("PASS" if ok1 and ok2 and ok3 else "FAIL")
     sys.exit(0 if ok1 and ok2 else 1)

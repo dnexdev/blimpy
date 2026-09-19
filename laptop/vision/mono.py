@@ -147,6 +147,7 @@ def main():
     ap.add_argument("--drift-px", type=float, default=8.0)
     ap.add_argument("--rot", type=int, default=0, help="degrees clockwise to rotate the stream (phone in portrait: 90)")
     ap.add_argument("--auto-calib", action="store_true", help="pose from the floor mat at start; re-solve when the drift check trips 2 s running")
+    ap.add_argument("--port", type=int, default=STATE_PORT, help=f"publish the fixes to this localhost port (default {STATE_PORT}; 5017 feeds the simulator's --person real)")
     ap.add_argument("--spacing", type=float, nargs="+", default=None, help="m between mat tag centres (one value or +X +Y); default: calib/mat.json from survey_mat.py, else config.MAT")
     args = ap.parse_args()
     from .detect import BalloonDetector, PersonTracker   # lazy: slow import, optional for --help
@@ -185,14 +186,14 @@ def main():
                       f"tag drift px={guard.last and round(guard.last, 1)}")
                 n_frames, t_rate = 0, time.monotonic()
             if guard.bad:                              # stale pose: say so instead of publishing wrong fixes
-                msg = nulls(now_ms(), "drift"); out.send(msg, ("127.0.0.1", STATE_PORT))
+                msg = nulls(now_ms(), "drift"); out.send(msg, ("127.0.0.1", args.port))
                 time.sleep(0.05); continue
             msg2, dets = step(cam, person_det, balloon_det, frame, prev_t, now_ms(), args.stale_ms,
                               balloon_diam=args.balloon_diam)
             if msg2 is None:
                 time.sleep(0.005); continue
             msg = msg2
-            out.send(msg, ("127.0.0.1", STATE_PORT))
+            out.send(msg, ("127.0.0.1", args.port))
             if msg["lost"]:
                 time.sleep(0.05)
             else:

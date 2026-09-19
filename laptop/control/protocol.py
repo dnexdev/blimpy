@@ -8,6 +8,7 @@ import json, math, socket, time
 CMD_PORT   = 5005   # laptop -> ESP32
 TELEM_PORT = 5006   # ESP32 -> laptop
 STATE_PORT = 5007   # vision / sim -> control (localhost)
+REAL_PERSON_PORT = 5017   # mono --port 5017 -> the simulator's --person real (the camera's person, a virtual balloon)
 
 CAP = 0.5           # max motor duty after mixing
 K_YR = 1.0          # yaw-rate P gain in the mixer (balloon has ~no yaw damping; needs authority)

@@ -22,7 +22,7 @@ import argparse, asyncio, json, math, queue, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from .. import config
 from . import imu_store
-from .protocol import CMD_PORT, FAILSAFE_MS, MIX_DT, STATE_PORT, TELEM_PORT, YR_MAX, UdpJson, clamp, mix, now_ms, wrap
+from .protocol import CMD_PORT, FAILSAFE_MS, MIX_DT, REAL_PERSON_PORT, STATE_PORT, TELEM_PORT, YR_MAX, UdpJson, clamp, mix, now_ms, wrap
 
 B = config.BLE
 LETTERS = ("C", "D", "E", "F")                 # the firmware's MOTORS argument order
@@ -118,10 +118,22 @@ class SimTransport(Transport):
         self.last_cmd = None; self.last_motors = None; self.n_cmds = 0
         self.stopping = False; self._dropped = False
         self.out = UdpJson() if publish_state else None
+        # --person real: the room camera's fixes (mono --port 5017) move the simulated person; nobody for 1.5 s = lost
+        self.person_in = UdpJson(REAL_PERSON_PORT) if getattr(world.person, "mode", None) == "real" else None
+        self.person_t = 0.0
+        self.person_seen = 0
 
     def start(self):
         threading.Thread(target=self._run, daemon=True, name="sim-robot").start()
         return self
+
+    def _poll_real_person(self, t):
+        for m, _ in self.person_in.recv_all():
+            p = m.get("person")
+            if p is not None:
+                self.world.set_real_person(p); self.person_t = t; self.person_seen += 1
+        if self.person_t and t - self.person_t > 1.5:
+            self.world.set_real_person(None); self.person_t = 0.0
 
     def _run(self):
         t_prev = time.monotonic(); next_imu = 0.0
@@ -133,6 +145,7 @@ class SimTransport(Transport):
             if not self.connected:
                 self.connected = True; self.connects += 1
             t = time.monotonic(); dt = min(0.25, t - t_prev); t_prev = t
+            if self.person_in is not None: self._poll_real_person(t)
             self.world.advance(dt)
             if self.out is not None:
                 for m in self.world.poll_state(): self.out.send(m, ("127.0.0.1", STATE_PORT))
@@ -296,7 +309,8 @@ def main():
     ap.add_argument("--name", default=None, help=f"BLE device name (config.BLE NAME = {B['NAME']!r})")
     ap.add_argument("--fake", action="store_true", help="simulated robot instead of Bluetooth")
     ap.add_argument("--sim", action="store_true", help="with --fake: publish the simulated balloon + person on 5007")
-    ap.add_argument("--person", choices=["static", "walk", "route", "random"], default="walk")
+    ap.add_argument("--person", choices=["static", "walk", "route", "random", "real"], default="walk",
+                    help="real = the room camera's person (run  python -m laptop.vision.mono --auto-calib --port 5017  as well)")
     ap.add_argument("--psi0", type=float, default=0.8); ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--ideal", action="store_true", help="with --fake: perfect sensors, no wind")
     ap.add_argument("--no-tof", action="store_true", help="with --fake: no ultrasonic in the IMU line (default: on, like the real gondola)")

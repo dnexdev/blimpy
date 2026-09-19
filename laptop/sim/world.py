@@ -140,7 +140,8 @@ class Wind:
 
 
 class Person:
-    """static | walk (slow circle, 0.15 m/s) | route (demo walk with stops, 0.5 m/s) | random (seeded waypoints).
+    """static | walk (slow circle, 0.15 m/s) | route (demo walk with stops, 0.5 m/s) | random (seeded waypoints) |
+    real (the room camera's person, pushed in by World.set_real_person; unseen until the first fix).
     A person does not walk into a 1.1 m balloon: when the next step would come within KEEP m of its centre the
     step is deflected around it (people sidestep; the follower must still back off or it gets pushed)."""
     ROUTE = [((2.0, 0.0), 6.0), ((3.0, 1.2), 5.0), ((-0.5, 1.2), 6.0), ((-1.0, -1.0), 5.0), ((1.5, -1.2), 5.0)]
@@ -158,6 +159,7 @@ class Person:
             self.p = [1.5, 0.0, 1.4]; self.wait = 3.0
         if mode == "walk":
             self.p = [3.5, 0.0, 1.4]
+        self.seen = mode != "real"          # real: False until the camera reports a person, False again when it loses them
 
     def _pick_random(self):
         lo, hi = self.arena
@@ -205,7 +207,7 @@ class Person:
 
     def step(self, dt, balloon=None):
         self.t += dt
-        if self.mode == "static":
+        if self.mode in ("static", "real"):
             return
         if self.mode == "walk":
             tgt = (2.0 + 1.5 * math.cos(0.1 * self.t), 1.5 * math.sin(0.1 * self.t))
@@ -375,7 +377,7 @@ class World:
                                                             round(b.y + g(r["balloon_noise"]), 3),
                                                             round(b.z + g(r["z_noise"]), 3)]
         p = self.person.p
-        if t <= self.person_drop_until:
+        if t <= self.person_drop_until or not self.person.seen:
             person = None
         elif r["person_outlier_p"] and rng.random() < r["person_outlier_p"]:
             a, d = rng.uniform(0, 2 * math.pi), rng.uniform(1.0, 2.0)
@@ -434,6 +436,14 @@ class World:
         due = [m for (td, m) in q if td <= self.t]
         q[:] = [(td, m) for (td, m) in q if td > self.t]
         return due
+
+    def set_real_person(self, xyz):
+        """--person real: the room camera's fix (x, y, z) in metres, or None when it does not see anyone."""
+        if xyz is None:
+            self.person.seen = False
+        else:
+            self.person.p = [float(xyz[0]), float(xyz[1]), float(xyz[2]) if len(xyz) > 2 else 1.4]
+            self.person.seen = True
 
     def poll_state(self):
         return self._drain(self.state_q)
