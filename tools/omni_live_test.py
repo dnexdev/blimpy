@@ -118,7 +118,7 @@ def ev_types(): return [e.get("type") for e in om.events]
 wait_for(lambda: any(e.get("type") == "session.updated" for e in om.events), 5)
 sess = next((e.get("session") for e in reversed(om.events) if e.get("type") == "session.updated"), {}) or {}
 check("session accepted: voice/pcm/semantic_vad/tool", sess.get("voice") == om.session["voice"] and sess.get("input_audio_format") == "pcm"
-      and (sess.get("turn_detection") or {}).get("type") == "semantic_vad" and [t.get("name") for t in sess.get("tools") or []] == ["set_intent"],
+      and (sess.get("turn_detection") or {}).get("type") == "semantic_vad" and sorted(t.get("name") for t in sess.get("tools") or []) == ["set_intent", "stay_silent"],
       f"voice {sess.get('voice')} fmt {sess.get('input_audio_format')}/{sess.get('output_audio_format')} vad {(sess.get('turn_detection') or {}).get('type')}")
 
 # 2. text turn speaks

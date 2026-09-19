@@ -335,6 +335,11 @@ A hackathon hall will talk to Blimpy all day. In order of payoff:
    name or a quick follow-up (the judge settles those), close-talk mic, `GATE_DB_LOUD` from `--calibrate`, and `m` + `p` as the fallback.
    `python -m laptop.voice.omni --debug` prints how long after `speech_stopped` each transcript came and how many
    reply packets were held: check it once with the key (the hold costs that much latency on addressed turns).
+3b. **Command safety net**: DONE. Seen live in the rehearsal: "Follow me." was judged for Blimpy, the model said "On it,
+   right behind you." and never called `set_intent`, so nothing moved. Now a turn judged for Blimpy whose reply ended
+   with no tool call goes through the local parser's regex shortcuts (`intent.fast_intent`: follow me, come here, turn
+   left, go up ...) and acts; numeric or long sentences stay with the model. Logged as `[omni] local: ...`, counted in
+   `stats["local_intents"]`; same idea as the stop-word net.
 4. **Press-to-talk**: DONE (`p` in the pilot: the mic goes up in full for ONE command, past the gate and past mute, until
    you stop talking). Stage mode: `m` once, then `p` before each command. `--mic AirPods --spk Speakers` puts the mic at
    your ear and the voice on the laptop speakers; keep HALF_DUPLEX on.

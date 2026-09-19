@@ -528,6 +528,7 @@ class OmniLive:
             self.stats["responses"] += 1; self._resp_active = False; self._t_resp_done = time.monotonic()
             r = ev.get("response") or {}
             if r.get("status") == "completed" and self._resp_played: self.t_last_reply = time.monotonic()
+            if not self._resp_client and r.get("status") == "completed" and self._turn is not None: self._local_intent(self._turn)
             od = ((r.get("usage") or {}).get("output_tokens_details") or (r.get("usage") or {}).get("output_token_details") or {})
             self.cost["text_out"] += od.get("text_tokens", 0) or 0
             if self.usage_log:
@@ -567,6 +568,7 @@ class OmniLive:
             return
         if turn is not None and not self._resp_client:
             with self._tlock:
+                if name == "set_intent": turn["n_calls"] += 1
                 if turn["verdict"] is None: turn["calls"].append((call_id, name, d)); return      # held until the turn is judged
             if turn["verdict"] is False: return self._call_ignored(call_id)
         self._exec_call(call_id, name, d)
@@ -632,7 +634,7 @@ class OmniLive:
         since = 0.0 if talking else (now - self.t_last_reply if self.t_last_reply > 0 else None)
         self._turn = {"t0": now, "verdict": None if ng else True, "audio": [], "calls": [], "since_reply": since, "asked": self._asked,
                       "presence": presence, "loudness": self.loudness, "timed_out": False, "pending": False, "text": None, "logged": False,
-                      "rec_t0": self.rec.now() if self.rec else None, "ctx": None, "dec": None, "judge": None}
+                      "rec_t0": self.rec.now() if self.rec else None, "ctx": None, "dec": None, "judge": None, "n_calls": 0, "local": False}
         return self._turn
 
     def _play(self, pcm):
@@ -718,6 +720,26 @@ class OmniLive:
             if self._resp_active and not self._resp_client: self.send({"type": "response.cancel"})
         return ok
 
+    def _local_intent(self, turn):
+        """Safety net for a plain spoken command: seen live ("Follow me." -> "On it, right behind you." and NO set_intent),
+        the model confirms and skips the tool. When a turn judged for Blimpy has its words, its reply is over and the model
+        made no set_intent call, the regex shortcuts of the local intent parser (intent.fast_intent: "follow me", "come
+        here", "turn left" ...) act instead. Never speaks (the model already did), never for long or numeric sentences
+        (fast_intent leaves those to a model), never twice."""
+        with self._tlock:
+            txt = turn["text"]
+            if turn["local"] or turn["verdict"] is not True or not txt or turn["n_calls"] or is_stop(txt): return
+            turn["local"] = True
+        try: from .intent import fast_intent
+        except Exception: return
+        it = fast_intent(txt)
+        if not it: return
+        it = {k: v for k, v in it.items() if k != "reply"}
+        self.stats["local_intents"] = self.stats.get("local_intents", 0) + 1
+        self._log("local", f"the model confirmed without calling set_intent -> {it}")
+        try: self.on_intent(it)
+        except Exception as e: self.last_error = f"local intent: {e}"
+
     def _log_turn(self, turn):
         """Once per turn, when both its words and its verdict are known: the transcript line, and the local stop."""
         with self._tlock:
@@ -734,6 +756,7 @@ class OmniLive:
             if txt: self.transcript.append(("ignored", txt)); self._log("ignored", f"{txt}   [{self.last_verdict}]")
             return
         if txt: self.transcript.append(("you", txt)); self._log("you", f"{txt}   [{self.last_verdict}]")
+        if not self._resp_active and self._t_resp_done > turn["t0"]: self._local_intent(turn)   # the reply is already over: no tool call is coming
         if is_stop(txt):                                  # local stop: hover now, whether or not the model calls the tool
             self.stats["local_stops"] = self.stats.get("local_stops", 0) + 1
             try: self.on_intent({"intent": "hover"})

@@ -220,6 +220,13 @@ check("name gate: a follow-up right after Blimpy's reply counts without the name
 mock.script.append({"heard": "everyone stop", "text": "Mm-hm.", "audio_chunks": 1})
 om2.t_last_reply = 0.0; n_int = len(intents); speak()
 check("name gate: a stop word always acts", wait_for(lambda: len(intents) > n_int, 4) and intents[-1] == {"intent": "hover"}, f"{intents[n_int:]}")
+mock.script.append({"heard": "Blimpy, follow me", "text": "On it, right behind you.", "audio_chunks": 1})   # seen live: confirmation, NO tool call
+om2.t_last_reply = 0.0; n_int = len(intents); speak()
+check("safety net: a plain command the model confirmed without set_intent acts locally (regex shortcut)",
+      wait_for(lambda: len(intents) > n_int, 4) and intents[-1] == {"intent": "follow_me"} and om2.stats.get("local_intents") == 1, f"{intents[n_int:]} {om2.stats.get('local_intents')}")
+mock.script.append({"heard": "Blimpy, set a timer for three minutes", "text": "How long exactly?", "audio_chunks": 1})
+n_int = len(intents); speak(); time.sleep(0.6)
+check("safety net stays out of numeric / long sentences (the model owns those)", len(intents) == n_int and om2.stats.get("local_intents") == 1, f"{intents[n_int:]}")
 om2.stop()
 
 import tempfile; REC_DIR = tempfile.mkdtemp(prefix="blimpy_rec_")
