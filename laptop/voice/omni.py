@@ -57,7 +57,10 @@ class MicGate:
     tracked and a close-talk mic still wins. Not a wake word: anything loud enough goes up. process(pcm) -> packets to
     send; level / floor / open are for the meter (python -m laptop.voice.omni --meter)."""
 
-    def __init__(self, open_db=None, min_dbfs=None, preroll_ms=None, hangover_ms=None, rate=IN_RATE, warmup_s=0.5, rise_db_s=3.0):
+    def __init__(self, open_db=None, min_dbfs=None, preroll_ms=None, hangover_ms=None, rate=IN_RATE, warmup_s=0.5, rise_db_s=3.0,
+                 on_ready=None):
+        # warmup_s: the gate listens to the room first (nothing goes up); at the end the noise floor is the 20th percentile
+        # of what it heard (someone talking during the listen does not poison it) and on_ready(gate) gets the verdict.
         self.open_db = GATE["open_db"] if open_db is None else open_db
         self.min_dbfs = GATE["min_dbfs"] if min_dbfs is None else min_dbfs
         self.preroll_s = (GATE["preroll_ms"] if preroll_ms is None else preroll_ms) / 1000.0
@@ -66,6 +69,14 @@ class MicGate:
         self.floor = None; self.level = -100.0; self.open = False; self.t0 = None; self.t_loud = 0.0
         self.pre = deque(); self.pre_s = 0.0
         self.total_s = 0.0; self.sent_s = 0.0; self.opens = 0
+        self.on_ready, self.ready, self._levels = on_ready, False, []
+
+    def verdict(self):
+        """One line about the room, from the floor measured during warmup."""
+        f = self.floor if self.floor is not None else -100.0
+        room = ("LOUD room: hold a headset mic close to your mouth, or use hold-to-talk" if f > -35 else
+                "noisy room: a close-talk mic is recommended" if f > -45 else "quiet room: the laptop mic is fine")
+        return f"room listened to for {self.warmup_s:.0f} s: noise floor {f:.0f} dBFS, the gate opens above {self.threshold:.0f} dBFS ({room})"
 
     @property
     def threshold(self): return max((self.floor if self.floor is not None else -100.0) + self.open_db, self.min_dbfs)
@@ -78,7 +89,12 @@ class MicGate:
         self.level = db = 20.0 * math.log10(math.sqrt(float(np.mean(a * a))) / 32768.0 + 1e-6)   # dBFS, floor -120
         if self.t0 is None: self.t0 = now
         self.floor = db if self.floor is None else min(db, self.floor + self.rise * secs)
-        loud = db > self.threshold and now - self.t0 >= self.warmup_s
+        if not self.ready:
+            self._levels.append(db)
+            if now - self.t0 >= self.warmup_s:
+                self.floor = sorted(self._levels)[len(self._levels) // 5]; self.ready = True; self._levels = []
+                if self.on_ready: self.on_ready(self)
+        loud = db > self.threshold and self.ready
         if loud: self.t_loud = now
         out = []
         if self.open:
@@ -479,10 +495,11 @@ if __name__ == "__main__":
     ap.add_argument("--full-duplex", action="store_true", help="headphones: keep the mic open while Blimpy talks (barge-in)")
     ap.add_argument("--no-gate", action="store_true", help="stream the mic continuously (costs ~0.77 units per minute)")
     ap.add_argument("--meter", action="store_true", help="no cloud: show the mic level, the noise floor and when the gate would open")
+    ap.add_argument("--listen", type=float, default=5.0, help="seconds the gate listens to the room before it opens (sets the noise floor)")
     a = ap.parse_args()
     if a.meter:
         import sounddevice as sd
-        g = MicGate()
+        g = MicGate(warmup_s=a.listen, on_ready=lambda g: print(f"\n[meter] {g.verdict()}"))
         with sd.RawInputStream(samplerate=IN_RATE, channels=1, dtype="int16", blocksize=MIC_BLOCK,
                                callback=lambda d, f, t, s: g.process(bytes(d))):
             print("[meter] talk normally, then stay quiet; the gate should be OPEN only while you talk (Ctrl+C to quit)")
@@ -499,7 +516,8 @@ if __name__ == "__main__":
         cam = Stream(a.cam, "eyes").wait_first()
     om = OmniLive(on_intent=lambda d: (print(f"\n[omni] TOOL set_intent {d}"), "ok, doing that")[1],
                   frame_fn=(lambda: cam.latest()[0]) if cam else None, mic=a.text is None, debug=a.debug,
-                  half_duplex=not a.full_duplex, purpose="omni_cli", gate=not a.no_gate)
+                  half_duplex=not a.full_duplex, purpose="omni_cli",
+                  gate=MicGate(warmup_s=a.listen, on_ready=lambda g: print(f"\n[omni] {g.verdict()}")) if not a.no_gate else False)
     print(f"[omni] connecting to {om.url} model {om.model} key {om.key[-4:] if om.key else None}")
     om.start()
     print("[omni] session up. talk to Blimpy (Ctrl+C to quit)")

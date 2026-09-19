@@ -31,6 +31,7 @@ OMNI = dict(
     GATE_MIN_DBFS=-50.0,     # never open below this absolute level (a fan in a silent room)
     GATE_PREROLL_MS=320,     # audio kept from just before the gate opened (the first syllable)
     GATE_HANGOVER_MS=1000,   # audio kept after the last loud packet; must stay > the server VAD's 600 ms of silence
+    GATE_LISTEN_S=5.0,       # on startup the gate listens to the room this long (nothing goes up), sets the floor, prints a verdict
 )
 
 # --- Eye on the balloon (laptop/vision/fpv.py): the Arduino/ESP32 camera on the gondola streams over the hotspot. It is

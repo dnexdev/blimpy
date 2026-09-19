@@ -188,7 +188,11 @@ passes through the gate. Frames go up only while the gate is open (that is when 
 a 10-minute demo with one minute of commands and two minutes of Blimpy talking is about 1.7 units; the live test ~0.35,
 `omni_sim_test.py` ~0.3, the offline suites 0. The pilot prints the key's balance at start, the session's cost at exit,
 and its status line shows `mic 12/240s OPEN -31dB>-46 ~0.20u` (seconds sent / heard, gate state, level vs threshold,
-units so far). Calibrate at the venue with `--meter`: if the hall opens the gate, raise `GATE_DB` or use a close-talk mic;
+units so far). On startup the gate listens to the room for `GATE_LISTEN_S` (5 s, nothing goes up), takes the 20th
+percentile of what it heard as the noise floor (talking during the listen does not poison it) and prints a verdict:
+quiet room / noisy room, use a close-talk mic / LOUD room, headset or hold-to-talk. A headset or lapel mic 3 cm from
+your mouth is ~25 dB louder than a laptop mic across the table while the crowd stays the same: that is what makes the
+science-fair floor and the stage look like the quiet room. Calibrate at the venue with `--meter`: if the hall opens the gate, raise `GATE_DB` or use a close-talk mic;
 if your voice does not open it, lower `GATE_DB`. `GATE=False` (or `--no-gate` in omni.py) streams everything again.
 
 Knobs: `config.OMNI` (CAMERA = what Blimpy sees, FPS, WATCH_S, HALF_DUPLEX), env `OMNI_MODEL` (default

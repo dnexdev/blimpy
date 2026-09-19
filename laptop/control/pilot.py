@@ -91,11 +91,12 @@ def main():
             except Exception as e: print(f"[pilot] no eyes ({e}); omni runs ears-only")
             frame_fn = (lambda: cam.latest()[0]) if cam else None
         O = config.OMNI
-        gate = dict(open_db=O["GATE_DB"], min_dbfs=O["GATE_MIN_DBFS"], preroll_ms=O["GATE_PREROLL_MS"], hangover_ms=O["GATE_HANGOVER_MS"]) if O["GATE"] else False
+        gate = dict(open_db=O["GATE_DB"], min_dbfs=O["GATE_MIN_DBFS"], preroll_ms=O["GATE_PREROLL_MS"], hangover_ms=O["GATE_HANGOVER_MS"],
+                    warmup_s=O["GATE_LISTEN_S"], on_ready=lambda g: print(f"\n[pilot] {g.verdict()}")) if O["GATE"] else False
         try:
             omni = OmniLive(on_intent=omni_intent, frame_fn=frame_fn, fps=O["FPS"], half_duplex=O["HALF_DUPLEX"], purpose="pilot", gate=gate).start()
             print(f"[pilot] OMNI live: {omni.model} ({'eyes (' + spec + ') + ears' if frame_fn else 'ears only'}); "
-                  f"mic gate {'on (streams only while someone talks)' if gate else 'OFF: 0.77 units per minute'}. Just talk.")
+                  f"mic gate {'on: listening to the room for %.0f s first, then it streams only while someone talks' % O['GATE_LISTEN_S'] if gate else 'OFF: 0.77 units per minute'}.")
             if frame_fn: watcher = FocusWatcher(frame_fn, on_report=reports.append, interval=O["WATCH_S"])
             try:
                 from ..voice.usage_log import relay_balance
