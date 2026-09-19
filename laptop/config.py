@@ -32,6 +32,13 @@ OMNI = dict(
     GATE_PREROLL_MS=320,     # audio kept from just before the gate opened (the first syllable)
     GATE_HANGOVER_MS=1000,   # audio kept after the last loud packet; must stay > the server VAD's 600 ms of silence
     GATE_LISTEN_S=5.0,       # on startup the gate listens to the room this long (nothing goes up), sets the floor, prints a verdict
+    # Name gate: a turn whose transcript has no "Blimpy" (or the recogniser's spellings of it) is NOT for Blimpy: its reply
+    # is cancelled and its command dropped. Exceptions: a follow-up within NAME_FOLLOWUP_S of Blimpy's last reply, stop
+    # words (safety), and a press-to-talk turn. The audio still goes up (it is what gets transcribed); a crowd cannot
+    # command the robot but can still cost a little. False = trust the model's own judgement of who is talking to it.
+    NAME_GATE=True,
+    NAME_WORDS=("blimpy", "blimpie", "blippi", "limpie", "blimp", "limpy", "blimpey"),
+    NAME_FOLLOWUP_S=8.0,
 )
 
 # --- Eye on the balloon (laptop/vision/fpv.py): the Arduino/ESP32 camera on the gondola streams over the hotspot. It is

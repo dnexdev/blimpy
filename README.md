@@ -288,10 +288,13 @@ A hackathon hall will talk to Blimpy all day. In order of payoff:
 2. **Level gate** in `feed_audio`: DONE (`MicGate`, section 1d; it is also what keeps the bill down). Only packets above
    the room's noise floor + `GATE_DB` go up, so background talkers at hall level never reach the cloud; tune with
    `python -m laptop.voice.omni --meter`.
-3. **Name gate**: the instructions already say only speech addressed to Blimpy counts; the transcript comes back with each
-   turn, so a turn whose transcript has no "Blimpy" (or "Blippi") can be ignored for tool calls.
-4. **Push-to-talk** as the safety net: `m` mutes the cloud mic in the pilot today; a foot pedal or a key held while
-   speaking is deterministic and judges do not mind it.
+3. **Name gate**: DONE (`config.OMNI NAME_GATE`, on). The server transcribes every turn; one without "Blimpy" (or the
+   recogniser's spellings: Blippi, Limpie, ...) gets its reply cancelled and its command dropped. A follow-up within
+   8 s of Blimpy's last words, a stop word, or a press-to-talk turn always counts. The audio still goes up (it is what
+   gets transcribed), so a crowd can cost a little but cannot command the robot. The pilot's status line counts `ignored`.
+4. **Press-to-talk**: DONE (`p` in the pilot: the mic goes up in full for ONE command, past the gate and past mute, until
+   you stop talking). Stage mode: `m` once, then `p` before each command. `--mic AirPods --spk Speakers` puts the mic at
+   your ear and the voice on the laptop speakers; keep HALF_DUPLEX on.
 A wake word (openWakeWord) is possible but needs a trained "blimpy" model; not worth it before the above.
 
 ## 1c. Positioning data (record / replay / venue)

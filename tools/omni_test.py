@@ -54,7 +54,7 @@ intents = []
 spk = FakeSpeaker()
 frame = np.zeros((720, 1280, 3), np.uint8); frame[100:600, 200:900] = (200, 30, 200)
 om = omni.OmniLive(on_intent=lambda d: (intents.append(d), "turning right")[1], frame_fn=lambda: frame,
-                   api_key="test-key-1234", url=f"ws://127.0.0.1:{PORT}/v1/realtime", fps=4.0, gate=False,   # gate tested in 10.
+                   api_key="test-key-1234", url=f"ws://127.0.0.1:{PORT}/v1/realtime", fps=4.0, gate=False, name_gate=False,   # gates tested in 10./11.
                    mic=False, speaker=spk, usage_log=ledger, purpose="omni_test", on_text=lambda w, t: None)
 t0 = time.monotonic(); om.start(timeout=5); t_conn = time.monotonic() - t0
 print(f"[test] session up in {t_conn:.2f}s")
@@ -175,6 +175,38 @@ check("gated client: speech -> audio and a frame within the first words", mock.s
 for _ in range(30): om2.feed_audio(quiet); time.sleep(0.04)     # 1.2 s of room after the words
 check("gated client: hangover closes the gate, cost counts only what was sent", not om2.gate.open and abs(om2.cost["audio_in_s"] - om2.gate.sent_s) < 1e-6
       and 2.5 < om2.cost["audio_in_s"] < 3.2, f"sent {om2.cost['audio_in_s']:.2f} s of {om2.gate.total_s:.2f} s -> {om2.units():.4f} units; {om2.mic_status()}")
+om2.muted = True; a1 = mock.stats["audio_appends"]
+for _ in range(5): om2.feed_audio(loud); time.sleep(0.005)
+om2.push_to_talk(); time.sleep(0.05)
+for _ in range(5): om2.feed_audio(quiet); time.sleep(0.005)
+time.sleep(0.3)
+check("press-to-talk: muted sends nothing, one press sends everything past mute and gate", mock.stats["audio_appends"] == a1 + 5 and om2.ptt and "PTT" in om2.mic_status(),
+      f"appends +{mock.stats['audio_appends'] - a1}, {om2.mic_status()}")
+om2._ptt_until = 0.0; om2.muted = False; om2._ptt_turn = False
+
+# 11. the name gate: a turn without "Blimpy" in its transcript is someone else talking -> reply cancelled, command dropped
+def speak():
+    """Exactly one mock turn: its VAD starts after 25 appends and stops 10 later; 40 appends leaves no room for a second."""
+    for _ in range(30): om2.feed_audio(loud); time.sleep(0.02)
+    for _ in range(10): om2.feed_audio(quiet); time.sleep(0.02)
+    time.sleep(0.3)
+mock.script.append({"heard": "hey guys come look at this thing", "tool": {"intent": "wander"}})
+om2.t_last_reply = 0.0; n_int = len(intents); n_out = len(mock.stats["tool_outputs"]); ign0 = om2.stats.get("ignored", 0); speak()
+wait_for(lambda: len(mock.stats["tool_outputs"]) > n_out, 4)
+check("name gate: a stranger's command is dropped (tool answered 'ignored', nothing executed)", len(intents) == n_int and om2.stats.get("ignored") == ign0 + 1
+      and any("ignored" in o["output"] for o in mock.stats["tool_outputs"][n_out:]) and ("ignored", "hey guys come look at this thing") in om2.transcript,
+      f"intents +{len(intents) - n_int}, ignored {om2.stats.get('ignored')}, {om2.mic_status()}")
+mock.script.append({"heard": "Blippi, wander around a bit", "tool": {"intent": "wander"}})
+speak()
+check("name gate: the name (even misspelt by the recogniser) gets through", wait_for(lambda: len(intents) > n_int, 4) and intents[-1] == {"intent": "wander"},
+      f"{intents[n_int:]}")
+mock.script.append({"heard": "actually turn left", "tool": {"intent": "rotate", "degrees": 90}})
+om2.t_last_reply = time.monotonic(); n_int = len(intents); speak()      # right after Blimpy spoke: a follow-up, no name needed
+check("name gate: a follow-up right after Blimpy's reply counts without the name", wait_for(lambda: len(intents) > n_int, 4) and intents[-1].get("intent") == "rotate",
+      f"{intents[n_int:]}")
+mock.script.append({"heard": "everyone stop", "text": "Mm-hm.", "audio_chunks": 1})
+om2.t_last_reply = 0.0; n_int = len(intents); speak()
+check("name gate: a stop word always acts", wait_for(lambda: len(intents) > n_int, 4) and intents[-1] == {"intent": "hover"}, f"{intents[n_int:]}")
 om2.stop(); stop()
 n_fail = sum(not v for v in results.values())
 print(f"\n{len(results) - n_fail}/{len(results)} checks passed")

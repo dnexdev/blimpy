@@ -14,6 +14,11 @@ Voice modes (--voice): omni   Qwen3.5-Omni realtime (OMNI Live track): always li
 
 Keys: SPACE arm/disarm     v  push-to-talk (press to start, press again to stop; local stack)
       t  type a command    n  heading nudge     m  mute/unmute the cloud mic     ESC quit
+      p  press-to-talk for the cloud: the mic goes up in full for ONE command, past the gate and past mute, until you
+         stop talking (or 10 s). Stage mode in a loud hall: press m once, then p before each command.
+--mic picks the input device (any earbuds with a mic beat the laptop's: list them with  python -m sounddevice), --spk the
+output (AirPods as the mic, laptop speakers for the voice:  --mic AirPods --spk Speakers). Keep HALF_DUPLEX on: the
+earbud mic still hears the laptop speakers.
 Startup does the heading nudge automatically on first arm (same as follow_me).
 """
 import argparse, math, os, sys, threading, time
@@ -34,6 +39,8 @@ def main():
     ap.add_argument("--voice", choices=["omni", "local", "none"], default=None,
                     help="omni (default when OMNI_API_KEY is set) | local (whisper+ollama) | none")
     ap.add_argument("--no-voice", action="store_true", help="= --voice none")
+    ap.add_argument("--mic", default=None, metavar="DEVICE", help="input device for the cloud mic: index or part of the name from  python -m sounddevice  (earbuds, headset)")
+    ap.add_argument("--spk", default=None, metavar="DEVICE", help="output device for Blimpy's voice (e.g. 'Speakers' when AirPods are the mic and Windows moved the output to them)")
     ap.add_argument("--omni-cam", default=None, metavar="SPEC",
                     help=f"camera Blimpy sees through in omni mode (default config.OMNI['CAMERA'] = {config.OMNI['CAMERA']!r}; 'none' = ears only)")
     ap.add_argument("--log", nargs="?", const="", default=None, metavar="NAME", help="record state/telemetry/commands to data/positioning/<ts>_pilot[_NAME]/ (laptop/positioning)")
@@ -94,7 +101,13 @@ def main():
         gate = dict(open_db=O["GATE_DB"], min_dbfs=O["GATE_MIN_DBFS"], preroll_ms=O["GATE_PREROLL_MS"], hangover_ms=O["GATE_HANGOVER_MS"],
                     warmup_s=O["GATE_LISTEN_S"], on_ready=lambda g: print(f"\n[pilot] {g.verdict()}")) if O["GATE"] else False
         try:
-            omni = OmniLive(on_intent=omni_intent, frame_fn=frame_fn, fps=O["FPS"], half_duplex=O["HALF_DUPLEX"], purpose="pilot", gate=gate).start()
+            name_gate = dict(words=tuple(w.lower() for w in O["NAME_WORDS"]), followup_s=O["NAME_FOLLOWUP_S"]) if O["NAME_GATE"] else False
+            omni = OmniLive(on_intent=omni_intent, frame_fn=frame_fn, fps=O["FPS"], half_duplex=O["HALF_DUPLEX"], purpose="pilot", gate=gate,
+                            mic_device=args.mic, spk_device=args.spk, name_gate=name_gate).start()   # devices: index or name fragment
+            print(f"[pilot] name gate {'ON: say Blimpy first (follow-ups within %.0f s, stop words and p turns always count)' % O['NAME_FOLLOWUP_S'] if name_gate else 'off'}")
+            if args.mic is not None or args.spk is not None:
+                import sounddevice as sd
+                print(f"[pilot] cloud mic: {sd.query_devices(omni.mic_device, 'input')['name'][:50]}   voice out: {sd.query_devices(omni.spk_device, 'output')['name'][:50]}")
             print(f"[pilot] OMNI live: {omni.model} ({'eyes (' + spec + ') + ears' if frame_fn else 'ears only'}); "
                   f"mic gate {'on: listening to the room for %.0f s first, then it streams only while someone talks' % O['GATE_LISTEN_S'] if gate else 'OFF: 0.77 units per minute'}.")
             if frame_fn: watcher = FocusWatcher(frame_fn, on_report=reports.append, interval=O["WATCH_S"])
@@ -167,6 +180,7 @@ def main():
                 elif k == "n" and armed: est.forget_heading(); beh.acq_i, beh.acq_t0, beh.acq_n = 0, None, 0
                 elif k == "v" and local_ok: voice_toggle()
                 elif k == "m" and omni is not None: omni.muted = not omni.muted; print(f"\n[pilot] cloud mic {'MUTED' if omni.muted else 'open'}")
+                elif k == "p" and omni is not None: omni.push_to_talk(); print("\n[pilot] press-to-talk: say your command")
                 elif k == "t":
                     keys.close(); run_text(input("\ncommand> ")); keys.__init__()
                 elif k == ESC: raise KeyboardInterrupt

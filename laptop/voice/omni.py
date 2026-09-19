@@ -40,6 +40,51 @@ JPEG_MAX_SIDE, JPEG_QUALITY, JPEG_MAX_B = 640, 70, 250_000   # provider limit: 2
 RELAY = dict(audio_in_tok_per_s=100, audio_out_tok_per_s=48000 / 3072, audio_in=8, text_in=1, text_out=6, audio_out=30,
              model=2, group=2, unit_quota=250_000)
 GATE = dict(open_db=12.0, min_dbfs=-50.0, preroll_ms=320, hangover_ms=1000)   # config.OMNI GATE_* override these in the pilot
+# Name gate: the server transcribes every turn; one without Blimpy's name (as the recogniser spells it) is not for Blimpy:
+# its reply is cancelled and its command dropped. Follow-ups within followup_s of Blimpy's last words, stop words and
+# press-to-talk turns always count. config.OMNI NAME_* override these in the pilot.
+NAME_GATE = dict(words=("blimpy", "blimpie", "blippi", "limpie", "blimp", "limpy", "blimpey"), followup_s=8.0)
+
+
+def is_addressed(text, words=NAME_GATE["words"]):
+    low = (text or "").lower()
+    return any(w in low for w in words)
+
+
+def pick_device(spec, kind):
+    """Resolve a device index or a name fragment ("AirPods", "Speakers") to a sounddevice index, or None for the default.
+    Windows lists the same speaker under five drivers: prefer MME (it resamples to our 16 kHz / 24 kHz; WASAPI and
+    WDM-KS refuse rates the device does not run natively), so "Speakers" is not ambiguous."""
+    if spec is None or spec == "": return None
+    if isinstance(spec, int) or str(spec).isdigit(): return int(spec)
+    import sounddevice as sd
+    want = str(spec).lower(); apis = sd.query_hostapis()
+    hits = [(i, d) for i, d in enumerate(sd.query_devices()) if want in d["name"].lower() and d[f"max_{kind}_channels"] > 0]
+    if not hits: raise ValueError(f"no {kind} device matching {spec!r} (python -m sounddevice lists them)")
+    rank = {"MME": 0, "Windows DirectSound": 1, "Windows WASAPI": 2}
+    return min(hits, key=lambda h: rank.get(apis[h[1]["hostapi"]]["name"], 3))[0]
+
+
+def open_mic(callback, device=None, rate=IN_RATE, block=MIC_BLOCK):
+    """Start a 16 kHz mono int16 capture that calls callback(pcm_bytes) per 40 ms. If the device refuses 16 kHz (Bluetooth
+    headsets under WDM-KS), capture at its own rate and resample down here."""
+    import sounddevice as sd
+    try:
+        s = sd.RawInputStream(samplerate=rate, channels=1, dtype="int16", blocksize=block, device=device,
+                              callback=lambda d, f, t, st: callback(bytes(d)))
+        s.start(); return s
+    except Exception as e:
+        native = int(sd.query_devices(device, "input")["default_samplerate"])
+        if native == rate: raise
+        import numpy as np
+        step = native / rate
+
+        def cb(d, f, t, st):
+            a = np.frombuffer(bytes(d), np.int16).astype(np.float32)
+            idx = np.arange(0, len(a) - 1, step)
+            callback(np.interp(idx, np.arange(len(a)), a).astype(np.int16).tobytes())
+        s = sd.RawInputStream(samplerate=native, channels=1, dtype="int16", blocksize=int(block * step), device=device, callback=cb)
+        s.start(); print(f"[omni] mic runs at {native} Hz, resampled to {rate} ({e.__class__.__name__} at {rate})"); return s
 
 
 def relay_units(audio_in_s=0.0, audio_out_s=0.0, text_in=0, text_out=0):
@@ -245,15 +290,17 @@ class OmniLive:
 
     def __init__(self, on_intent, frame_fn=None, api_key=None, model=None, url=None, session=None, fps=1.0,
                  mic=True, speaker=True, mic_device=None, spk_device=None, half_duplex=True, purpose="demo",
-                 usage_log=True, debug=False, on_text=None, gate=True):
+                 usage_log=True, debug=False, on_text=None, gate=True, name_gate=True):
         self.on_intent, self.frame_fn, self.fps = on_intent, frame_fn, fps
         self.gate = gate if isinstance(gate, MicGate) else (MicGate(**gate) if isinstance(gate, dict) else (MicGate() if gate else None))
+        self.name_gate = (dict(NAME_GATE, **name_gate) if isinstance(name_gate, dict) else (dict(NAME_GATE) if name_gate else None))
+        self._ignore_turn = False; self._ptt_turn = False; self.t_last_reply = 0.0      # name gate state
         self.cost = {"audio_in_s": 0.0, "audio_out_s": 0.0, "text_in": 0, "text_out": 0}   # what the relay charges for, this session
         self.key = api_key or API_KEY
         self.model, self.url = model or MODEL, url or URL
         self.session = dict(SESSION, **(session or {}))
         self.use_mic, self.use_spk = mic, speaker
-        self.mic_device, self.spk_device = mic_device, spk_device
+        self.mic_device, self.spk_device = pick_device(mic_device, "input"), pick_device(spk_device, "output")
         self.half_duplex = half_duplex      # laptop speakers + laptop mic: drop mic packets while Blimpy talks (no AEC)
         self.purpose, self.debug, self.on_text = purpose, debug, on_text
         self.usage_log, self.usage_path = bool(usage_log), (usage_log if isinstance(usage_log, str) else None)   # True = data/omni_usage.jsonl
@@ -264,6 +311,7 @@ class OmniLive:
         self.events = deque(maxlen=200)     # last raw server events (debug / tests)
         self._done_calls = set(); self._t_resp = 0.0; self._audio_since_commit = 0; self._sess_ok = False
         self.t_speech_stopped = 0.0; self.t_first_audio = 0.0     # per response: VAD end of the user's turn -> first reply audio
+        self._ptt_until = 0.0                                      # press-to-talk window (push_to_talk)
         self._resp_active = False; self._after_done = []           # response.create is refused while a response runs: queue it
         self.transcript = []                # (who, text) for the demo log
         self._t_frame = 0.0
@@ -346,11 +394,13 @@ class OmniLive:
         elif t == "response.audio.delta":
             if not self.t_first_audio: self.t_first_audio = time.monotonic()
             pcm = base64.b64decode(ev.get("delta", "")); self.stats["audio_out"] += len(pcm); self.cost["audio_out_s"] += len(pcm) / 2 / OUT_RATE
+            if not self._ignore_turn: self.t_last_reply = time.monotonic()
             if self.spk: self.spk.write(pcm)
         elif t == "input_audio_buffer.speech_started":
+            self._ignore_turn = False                     # a new turn: judged again when its transcript arrives
             if self.spk: self.spk.flush()                 # barge-in: user talks over Blimpy
         elif t == "input_audio_buffer.speech_stopped":
-            self.t_speech_stopped = time.monotonic()
+            self.t_speech_stopped = time.monotonic(); self._ptt_until = 0.0      # a press-to-talk turn ends here
         elif t == "input_audio_buffer.committed":
             self._audio_since_commit = 0
         elif t in ("response.function_call_arguments.done",):
@@ -364,6 +414,16 @@ class OmniLive:
             if txt: self.transcript.append(("blimpy", txt)); self._log("blimpy", txt)
         elif t == "conversation.item.input_audio_transcription.completed":
             txt = ev.get("transcript") or ""
+            now = time.monotonic()
+            addressed = (self.name_gate is None or is_addressed(txt, self.name_gate["words"]) or is_stop(txt) or self._ptt_turn
+                         or now - self.t_last_reply < self.name_gate["followup_s"])
+            self._ptt_turn = False
+            if not addressed:                             # someone else talking: cancel the reply, drop any command of this turn
+                self._ignore_turn = True; self.stats["ignored"] = self.stats.get("ignored", 0) + 1
+                if self.spk: self.spk.flush()
+                if self._resp_active: self.send({"type": "response.cancel"})
+                if txt: self.transcript.append(("ignored", txt)); self._log("ignored", txt)
+                return
             if txt: self.transcript.append(("you", txt)); self._log("you", txt)
             if is_stop(txt):                              # local stop: hover now, whether or not the model calls the tool
                 self.stats["local_stops"] = self.stats.get("local_stops", 0) + 1
@@ -377,6 +437,7 @@ class OmniLive:
         elif t == "response.done":
             self.stats["responses"] += 1; self._resp_active = False
             r = ev.get("response") or {}
+            if r.get("status") == "completed" and not self._ignore_turn: self.t_last_reply = time.monotonic()
             od = ((r.get("usage") or {}).get("output_tokens_details") or (r.get("usage") or {}).get("output_token_details") or {})
             self.cost["text_out"] += od.get("text_tokens", 0) or 0
             if self.usage_log:
@@ -407,6 +468,11 @@ class OmniLive:
         self._done_calls.add(call_id); self.stats["calls"] += 1
         try: d = json.loads(args) if isinstance(args, str) else dict(args or {})
         except ValueError: d = {}
+        if self._ignore_turn:                             # name gate: the turn was not for Blimpy; answer the call, run nothing
+            self.send({"type": "conversation.item.create",
+                       "item": {"type": "function_call_output", "call_id": call_id,
+                                "output": json.dumps({"result": "ignored: that was not addressed to you. Stay quiet."})}})
+            return
         if name != "set_intent":
             out = f"unknown tool {name}"
         else:
@@ -423,11 +489,25 @@ class OmniLive:
         else: self.send({"type": "response.create"})
 
     # ------------------------------------------------------------------ inputs
+    def push_to_talk(self, max_s=10.0):
+        """Press-to-talk: the mic goes up in full for ONE turn, past the gate and past mute, until the server hears you
+        stop (speech_stopped) or max_s. Stage mode = mute once, then one press per command."""
+        self._ptt_until = time.monotonic() + max_s; self._t_frame = 0.0; self._ptt_turn = True
+        if self.gate: self.gate.pre.clear(); self.gate.pre_s = 0.0
+
+    @property
+    def ptt(self): return time.monotonic() < self._ptt_until
+
     def feed_audio(self, pcm16_bytes):
         """Push 16 kHz mono int16 PCM (the mic callback, tests, or a custom capture). With a gate, silence stays here."""
-        if self.muted or not self.ok: return
+        if not self.ok: return
         if self.half_duplex and self.spk and self.spk.busy(): return
-        if self.gate:
+        if self.ptt:
+            packets = [pcm16_bytes]
+            if self.gate: self.gate.total_s += len(pcm16_bytes) / 2 / IN_RATE; self.gate.sent_s += len(pcm16_bytes) / 2 / IN_RATE
+        elif self.muted:
+            return
+        elif self.gate:
             was = self.gate.open
             packets = self.gate.process(pcm16_bytes)
             if self.gate.open and not was: self._t_frame = 0.0      # a frame with the first words, not a second later
@@ -439,9 +519,7 @@ class OmniLive:
 
     def _start_mic(self):
         import sounddevice as sd
-        self.mic_stream = sd.RawInputStream(samplerate=IN_RATE, channels=1, dtype="int16", blocksize=MIC_BLOCK,
-                                            device=self.mic_device, callback=lambda d, f, t, s: self.feed_audio(bytes(d)))
-        self.mic_stream.start()
+        self.mic_stream = open_mic(self.feed_audio, self.mic_device)
 
     def send_frame(self, frame):
         # Verified live: the relay refuses an image until audio has been appended to the CURRENT input buffer ("Error
@@ -482,8 +560,9 @@ class OmniLive:
         """One short string for a status line: what the mic sent vs heard, gate state and level, estimated units."""
         g = self.gate
         if g is None: return f"mic {self.stats['audio_in'] / 32000:.0f}s ~{self.units():.2f}u"
-        return (f"mic {g.sent_s:.0f}/{g.total_s:.0f}s {'OPEN' if g.open else 'shut'} {g.level:.0f}dB>{g.threshold:.0f} "
-                f"~{self.units():.2f}u")
+        state = "PTT " if self.ptt else ("MUTED" if self.muted else ("OPEN" if g.open else "shut"))
+        ign = f" ignored {self.stats['ignored']}" if self.stats.get("ignored") else ""
+        return f"mic {g.sent_s:.0f}/{g.total_s:.0f}s {state} {g.level:.0f}dB>{g.threshold:.0f} ~{self.units():.2f}u{ign}"
 
 
 if __name__ == "__main__":
@@ -496,27 +575,29 @@ if __name__ == "__main__":
     ap.add_argument("--no-gate", action="store_true", help="stream the mic continuously (costs ~0.77 units per minute)")
     ap.add_argument("--meter", action="store_true", help="no cloud: show the mic level, the noise floor and when the gate would open")
     ap.add_argument("--listen", type=float, default=5.0, help="seconds the gate listens to the room before it opens (sets the noise floor)")
+    ap.add_argument("--mic", default=None, help="input device: index or name fragment (AirPods, Headset); python -m sounddevice lists them")
+    ap.add_argument("--spk", default=None, help="output device for the voice (Speakers)")
     a = ap.parse_args()
     if a.meter:
         import sounddevice as sd
         g = MicGate(warmup_s=a.listen, on_ready=lambda g: print(f"\n[meter] {g.verdict()}"))
-        with sd.RawInputStream(samplerate=IN_RATE, channels=1, dtype="int16", blocksize=MIC_BLOCK,
-                               callback=lambda d, f, t, s: g.process(bytes(d))):
-            print("[meter] talk normally, then stay quiet; the gate should be OPEN only while you talk (Ctrl+C to quit)")
-            try:
-                while True:
-                    time.sleep(0.1); bar = "#" * max(0, int((g.level + 60) / 2))
-                    print(f"[meter] {g.level:6.1f} dBFS floor {g.floor if g.floor is not None else -100:6.1f} opens at {g.threshold:6.1f}  "
-                          f"{'OPEN ' if g.open else 'shut '} sent {g.sent_s:5.1f}/{g.total_s:5.1f}s {bar:30s}", end="\r", flush=True)
-            except KeyboardInterrupt: print()
-        sys.exit(0)
+        dev = pick_device(a.mic, "input"); print(f"[meter] mic: {sd.query_devices(dev, 'input')['name'][:60]}")
+        s = open_mic(g.process, dev)
+        print("[meter] talk normally, then stay quiet; the gate should be OPEN only while you talk (Ctrl+C to quit)")
+        try:
+            while True:
+                time.sleep(0.1); bar = "#" * max(0, int((g.level + 60) / 2))
+                print(f"[meter] {g.level:6.1f} dBFS floor {g.floor if g.floor is not None else -100:6.1f} opens at {g.threshold:6.1f}  "
+                      f"{'OPEN ' if g.open else 'shut '} sent {g.sent_s:5.1f}/{g.total_s:5.1f}s {bar:30s}", end="\r", flush=True)
+        except KeyboardInterrupt: print()
+        s.stop(); s.close(); sys.exit(0)
     cam = None
     if not a.no_cam and a.cam != "none":
         from ..vision.streams import Stream
         cam = Stream(a.cam, "eyes").wait_first()
     om = OmniLive(on_intent=lambda d: (print(f"\n[omni] TOOL set_intent {d}"), "ok, doing that")[1],
                   frame_fn=(lambda: cam.latest()[0]) if cam else None, mic=a.text is None, debug=a.debug,
-                  half_duplex=not a.full_duplex, purpose="omni_cli",
+                  half_duplex=not a.full_duplex, purpose="omni_cli", mic_device=a.mic, spk_device=a.spk,
                   gate=MicGate(warmup_s=a.listen, on_ready=lambda g: print(f"\n[omni] {g.verdict()}")) if not a.no_gate else False)
     print(f"[omni] connecting to {om.url} model {om.model} key {om.key[-4:] if om.key else None}")
     om.start()
