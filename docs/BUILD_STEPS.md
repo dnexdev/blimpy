@@ -3,7 +3,8 @@
 Sequential build of the Blimpy robot, one step at a time, for two software people and a breadboard the hardware team
 has finished. Each step has **You need**, **Do**, **You should see** and **If not**. Do the steps in order. Do not
 start a step while the previous step's **You should see** has not happened. Every command runs in PowerShell from the
-repo root with the virtual environment active (`.\.venv\Scripts\Activate.ps1`).
+repo root: `cd C:\Users\raymo\Projects\blimpy`. On Raymond's laptop plain `python` has every package (the Windows Store
+Python; there is no venv to activate). On any other machine make a venv first: README section 0.
 
 The design behind these steps (what the software assumes and why) is in `docs/ROBOT_BUILD.md`.
 
@@ -57,17 +58,17 @@ The design behind these steps (what the software assumes and why) is in `docs/RO
 - the repo at `C:\Users\raymo\Projects\blimpy`
 
 **Do**
-1. Open PowerShell in the repo folder.
+1. Open PowerShell. Run `cd C:\Users\raymo\Projects\blimpy`.
 2. Run `git pull`.
-3. Run `.\.venv\Scripts\Activate.ps1`.
+3. Run `python -c "import bleak, cv2, ultralytics, torch; print('ok')"`. There is no venv on this laptop: the packages live in the Windows Store Python, and plain `python` is the right one.
 4. Open Windows Settings > Bluetooth & devices and make sure Bluetooth is On.
 
 **You should see**
-- The prompt starts with `(.venv)`.
 - `git pull` says `Already up to date.` or lists the files it fetched.
+- The import line prints `ok` after a few seconds (torch takes a moment to load).
 
 **If not**
-- No `.venv`: follow README section 0 (create the venv, install torch, `pip install -r requirements.txt`).
+- `ModuleNotFoundError`: this is another machine or another Python. Follow README section 0 (venv, torch, `pip install -r requirements.txt`) and use that venv for every command.
 - `git pull` complains about local changes: run `git status`, ask the software side before discarding anything.
 
 #### Step 2. Prove the laptop side works with no hardware
@@ -199,7 +200,7 @@ The design behind these steps (what the software assumes and why) is in `docs/RO
 #### Step 9. Check the map through the bridge
 
 **You need**
-- two PowerShell windows, both in the repo with the venv active
+- two PowerShell windows, both in the repo folder
 
 **Do**
 1. Window 1: `python -m laptop.control.ble_gondola`. Leave it running.

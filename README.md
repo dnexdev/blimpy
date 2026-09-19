@@ -32,6 +32,9 @@ python -m venv .venv; .\.venv\Scripts\Activate.ps1
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128   # RTX 5080 needs cu128+
 pip install -r requirements.txt
 ```
+(Raymond's laptop has no venv: everything was installed into the Windows Store Python's user site, so plain `python` in any
+PowerShell window is the right interpreter there. Make the venv on any other machine.)
+
 Gondola link (Bluetooth LE): the gondola advertises as `BalloonRobot`. Windows Bluetooth on, then:
 ```powershell
 python -m laptop.control.ble_gondola      # scan, connect, bridge udp 5005/5006 <-> BLE. Leave it running (Ctrl+C = STOP)
