@@ -29,7 +29,7 @@ from .protocol import CMD_PORT, STATE_PORT, TELEM_PORT, UdpJson, make_cmd, now_m
 from .estimator import StateEstimator
 from .link import TelemWatchdog
 from .altitude import LiftHold
-from .behaviors import Behaviors
+from .behaviors import AxisArbiter, Behaviors
 from .follow_me import nudge_ok
 from .keys import ESC, KeyPoller
 
@@ -216,6 +216,7 @@ def main():
     log = open_session(args.log, tag="pilot")    # NullLog unless --log: records what this loop consumed, heard and sent
     est = StateEstimator(alpha=G["POS_ALPHA"], beta=G["VEL_BETA"])
     wd = TelemWatchdog()                          # telemetry silence / board-side failsafe -> disarm (laptop/control/link.py)
+    arb = AxisArbiter()                              # forward / sideways / turning: one at a time
     lift = LiftHold()                                # the height loop (laptop/control/altitude.py), gains config.HOVER
     beh = Behaviors(say)
     armed, nudge_end, recording = False, 0.0, False
@@ -273,7 +274,7 @@ def main():
                 if k == " ":
                     armed = not armed; log.event("arm", armed=armed)
                     if armed:
-                        wd.arm(t); beh.on_armed(est); lift.arm()            # hold the height it has right now
+                        wd.arm(t); beh.on_armed(est); lift.arm(); arb.reset()   # hold the height it has right now
                         if not est.head_ok and not est.rel and not nudge_ok(est, beh.obstacles, beh.arena): print("\n[pilot] not much room here to learn the heading (follow / go-to need it; hover and move left / right do not)")
                 elif k == "n" and armed: est.forget_heading(); beh.acq_i, beh.acq_t0, beh.acq_n = 0, None, 0
                 elif k == "v" and local_ok: voice_toggle()
@@ -313,6 +314,8 @@ def main():
                     armed, note = False, "BALLOON LOST -> disarm"; log.event("disarm", reason="balloon lost")
                 else:
                     vf, vs, yr, vz, note = beh.step(est)
+                    vf, vs, yr, axis = arb.pick(vf, vs, yr, t)       # one horizontal motor set at a time (behaviors.AxisArbiter)
+                    note = f"{note} | {axis}"
                     if not est.rel:                                  # room camera: the height is NOT the behaviours' (or the voice agent's)
                         vz = lift.cmd(t, beh.z_offset)               # business. altitude.LiftHold decides the fan every tick, whatever
                         note = f"{note} | {lift.note}"               # the mode; "go up / down" only moves its target (z_offset)

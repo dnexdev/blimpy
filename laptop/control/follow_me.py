@@ -269,7 +269,7 @@ def main():
     ap.add_argument("--log", nargs="?", const="", default=None, metavar="NAME", help="record state/telemetry/commands to data/positioning/<ts>_follow[_NAME]/ (laptop/positioning)")
     args = ap.parse_args()
     args.esp = resolve(args.esp)
-    from .behaviors import Behaviors          # same brain as pilot.py, minus the voice
+    from .behaviors import AxisArbiter, Behaviors   # same brain as pilot.py, minus the voice
     from .altitude import LiftHold            # (imports AltHold from this module: not at the top)
     from ..positioning.session import open_session
 
@@ -277,6 +277,7 @@ def main():
     log = open_session(args.log, tag="follow")   # NullLog unless --log: records what this loop consumed and sent
     est = StateEstimator(alpha=G["POS_ALPHA"], beta=G["VEL_BETA"])
     wd = TelemWatchdog()                          # telemetry silence / board-side failsafe -> disarm (laptop/control/link.py)
+    arb = AxisArbiter()                           # forward / sideways / turning: one at a time
     lift = LiftHold()                             # the height loop, beside the behaviours (laptop/control/altitude.py)
     beh = Behaviors(lambda s: print(f"\n[blimpy] {s}"))
     armed, t_balloon = False, 0
@@ -302,7 +303,7 @@ def main():
                 if k == " ":
                     armed = not armed; log.event("arm", armed=armed)
                     if armed:
-                        wd.arm(t); beh.on_armed(est); lift.arm()
+                        wd.arm(t); beh.on_armed(est); lift.arm(); arb.reset()
                         if not est.head_ok and not nudge_ok(est, beh.obstacles, beh.arena):
                             print("\n[blimpy] not much room here to learn which way I'm facing")
                 elif k == "n" and armed:
@@ -324,7 +325,8 @@ def main():
                     armed, note = False, "BALLOON LOST -> disarm"; log.event("disarm", reason="balloon lost")
                 else:
                     vf, vs, yr, vz, note = beh.step(est)
-                    vz = lift.cmd(t, beh.z_offset); note = f"{note} | {lift.note}"
+                    vf, vs, yr, axis = arb.pick(vf, vs, yr, t)
+                    vz = lift.cmd(t, beh.z_offset); note = f"{note} | {axis} | {lift.note}"
             est.observe_motion(vf, vs, vz, t)
             cmd = make_cmd(vf, yr, vz, armed, vs)
             cmd_out.send(cmd, (args.esp, CMD_PORT)); log.cmd(cmd)

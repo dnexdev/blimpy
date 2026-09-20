@@ -246,6 +246,13 @@ FOLLOW = dict(
                           # mixer the bridge only says armed:1 once the BOX reports it is flying, and the box talks every 200 ms:
                           # up to ~6 frames of armed:0 right after arming are normal, 12 (0.6 s) is a box that really did not take it
     AGE_WARN_MS=300,      # the board's 'ms since last command' above this -> print a link warning (its failsafe trips at 500)
+    # One horizontal motor set at a time (behaviors.AxisArbiter): REAR = the two motors at the back (forward / back AND turning, also mixed:
+    # it is still only those two) or SIDE = the sideways motor.
+    # The motors share one weak supply: all of them at once is none of them, and it reads as random motion. The lift motor is not part of this.
+    AXIS_MIN_S=1.0,       # s the chosen set keeps running before another may take over
+    AXIS_GAP_S=0.3,       # s of nothing between two sets (spin down, the supply recovers, and it reads as: turn, pause, push)
+    AXIS_SWITCH_RATIO=1.4,   # another set takes over only when it asks this many times harder than the running one
+    AXIS_DEAD=0.15,       # a set asking for less than this share of its cap asks for nothing
     NUDGE_MAX_S=6.0,      # s a "move left / right / forward / back" body push lasts at most (it ends earlier once the camera saw the distance)
     NUDGE_S=3.0, NUDGE_VF=0.3,   # heading-calibration nudge on first arm: fly forward, learn heading from the response
     TWITCH_S=2.5, TWITCH_AFTER_S=40,   # re-learn heading with a short forward push after this long without a manoeuvre (2.0 until

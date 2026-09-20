@@ -8,7 +8,8 @@
 # Background output: data/logs/bridge.log, data/logs/mono.log
 cd "$(dirname "$0")" || exit 1
 PY=.venv/bin/python; [ -x "$PY" ] || PY=python3
-BRIDGE_ARGS="--motor-cap 1 --lift-first --total-cap 1.6"
+# --no-yaw-hold: no gyro loop running L/R under whatever set the pilot chose (one motor set at a time)
+BRIDGE_ARGS="--motor-cap 1 --lift-first --total-cap 1.6 --no-yaw-hold"
 MONO_ARGS="--auto-calib --show"
 mkdir -p data/logs
 

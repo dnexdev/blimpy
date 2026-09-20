@@ -23,6 +23,50 @@ NEEDS_HEADING = ("FOLLOW", "GO_TO", "WANDER")   # modes that steer in the room. 
 NUDGE_DIRS = {"forward": (1.0, 0.0), "back": (-1.0, 0.0), "backward": (-1.0, 0.0), "left": (0.0, 1.0), "right": (0.0, -1.0)}   # body frame: +x ahead, +y left
 
 
+class AxisArbiter:
+    """One horizontal motor SET at a time. The sets are the physical ones: REAR = the two motors at the back of the
+    chassis (L and R: together they push forward / back, against each other they turn, and any mix of the two is still
+    only those two motors), SIDE = the sideways motor (S). In: what the behaviours want on the three axes. Out: the
+    same, with only one set's axes left. Height is not in here.
+    The set that asks hardest (as a share of its cap) runs; it keeps running AXIS_MIN_S, the other takes over only when
+    it asks AXIS_SWITCH_RATIO times harder or the running one has gone quiet, and AXIS_GAP_S of nothing sits between
+    two sets."""
+    SETS = (("REAR", (0, 2)), ("SIDE", (1,)))          # set name -> indices into (vf, vs, yr)
+
+    def __init__(self, gains=None):
+        self.g = G if gains is None else gains
+        self.reset()
+
+    def reset(self):
+        self.axis, self.t_axis, self.t_gap = None, -1e9, -1e9
+
+    def pick(self, vf, vs, yr, now):
+        g = self.g
+        cmd = (vf, vs, yr)
+        share = [abs(vf) / g["VF_CAP"], abs(vs) / g["VS_CAP"], abs(yr) / g["YR_CAP"]]
+        share = [w if w >= g["AXIS_DEAD"] else 0.0 for w in share]
+        want = [max(share[i] for i in idx) for _, idx in self.SETS]
+        best = max(range(len(want)), key=lambda k: want[k])
+        if want[best] == 0.0: best = None
+        cur = self.axis
+        if cur is not None:
+            quiet = want[cur] == 0.0
+            held = now - self.t_axis < g["AXIS_MIN_S"]
+            beaten = best is not None and best != cur and want[best] > g["AXIS_SWITCH_RATIO"] * want[cur]
+            if quiet or (beaten and not held):
+                self.axis, self.t_gap = None, now                 # let go; the next set starts after the gap
+            cur = self.axis
+        if cur is None and best is not None and now - self.t_gap >= g["AXIS_GAP_S"]:
+            self.axis = cur = best; self.t_axis = now
+        if cur is None:
+            return 0.0, 0.0, 0.0, "coast"
+        name, idx = self.SETS[cur]
+        out = [0.0, 0.0, 0.0]
+        for i in idx:
+            if share[i] > 0.0: out[i] = cmd[i]
+        return out[0], out[1], out[2], name
+
+
 class Behaviors:
     def __init__(self, say, now=time.monotonic, obstacles=None, arena=None, rng=None):
         self.say, self.now = say, now
