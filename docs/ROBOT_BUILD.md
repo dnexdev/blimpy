@@ -1,6 +1,6 @@
 # Blimpy: how to build the robot
 
-Read out of the code on 2026-09-19 (`laptop/config.py` PHYS / BLE / FOLLOW, `PROTOCOL.md` section 6, `laptop/sim/world.py`,
+Read out of the code on 2026-09-19 (`laptop/config.py` PHYS / BLE / FOLLOW, `PROTOCOL.md` section 6, `archive/sim/world.py`,
 `laptop/control/ble_gondola.py`, `estimator.py`, `laptop/vision/mono.py`, `detect.py`). Every number below is what the
 software already assumes. The ones marked **MEASURE** are placeholders: measure them on the bench, write them in
 `laptop/config.py` and log them in `calib/MEASUREMENTS.md`.
@@ -223,7 +223,7 @@ the README has the same bench checklist with more detail.
     `calib/MEASUREMENTS.md` (`TOF_BELOW` stays as it is: no ultrasonic on this box).
 13. **Rerun the simulator suite** with the measured numbers, so the controller has been tested with the real vehicle:
     ```powershell
-    python tools/scenarios.py --seeds 3
+    python archive/tools/scenarios.py --seeds 3
     ```
 14. **First flight = hover only.** Laptop webcam looking at the room, mat board on the floor in view, balloon in view:
     ```powershell
@@ -274,7 +274,7 @@ the README has the same bench checklist with more detail.
 | walls, table, judges spot | `venues/default.json` | avoidance, go-to |
 
 Every measured value also gets a dated row in `calib/MEASUREMENTS.md` so it is never lost. After changing PHYS run
-`python tools/scenarios.py --seeds 3` and `python tools/control_test.py`.
+`python archive/tools/scenarios.py --seeds 3` and `python tools/control_test.py`.
 
 ## 8. Go / no-go before the first flight
 

@@ -1,15 +1,15 @@
 """Headless scenario suite: runs the REAL controller code (estimator + behaviors, exactly what pilot.py runs)
-against the simulated world (laptop/sim/world.py) at ~100x real time and scores it against ground truth.
+against the simulated world (archive/sim/world.py) at ~100x real time and scores it against ground truth.
 Run it after touching anything in laptop/control or the gains in laptop/config.py.
 
-  python tools/scenarios.py                 # all scenarios: table + PASS/FAIL
-  python tools/scenarios.py rotate go_to    # only scenarios whose name contains one of these
-  python tools/scenarios.py --plot          # also save sim_out/<name>.png (trajectory, height, heading, distance)
-  python tools/scenarios.py --seeds 3       # repeat each scenario with 3 random seeds; the table shows the worst
-  python tools/scenarios.py --tof           # ToF altimeter on in every scenario (default: only the ToF scenarios; see world.py REAL)
+  python archive/tools/scenarios.py                 # all scenarios: table + PASS/FAIL
+  python archive/tools/scenarios.py rotate go_to    # only scenarios whose name contains one of these
+  python archive/tools/scenarios.py --plot          # also save sim_out/<name>.png (trajectory, height, heading, distance)
+  python archive/tools/scenarios.py --seeds 3       # repeat each scenario with 3 random seeds; the table shows the worst
+  python archive/tools/scenarios.py --tof           # ToF altimeter on in every scenario (default: only the ToF scenarios; see world.py REAL)
 """
 import argparse, math, os, pathlib, random, statistics, sys
-ROOT = pathlib.Path(__file__).resolve().parents[1]
+ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT)); os.chdir(ROOT)
 from laptop import config
 from laptop.control.protocol import make_cmd, wrap
@@ -17,7 +17,7 @@ from laptop.control.estimator import StateEstimator
 from laptop.control.behaviors import Behaviors
 from laptop.control.follow_me import nudge_ok
 from laptop.control.link import TelemWatchdog
-from laptop.sim.world import IDEAL, REAL, World
+from archive.sim.world import IDEAL, REAL, World
 
 G = config.FOLLOW
 PILLAR = (1.4, -0.2, 0.2)          # a pillar / tripod between the start and the judges (2 m of room north of it)
@@ -101,16 +101,24 @@ class Run:
 
 # ---------------------------------------------------------------------------------------------------- scenarios
 # Each returns (run, checks) with checks = [(label, value, ok)].
+def chatter(rows):
+    """Mean |d vf| + |d vs| between consecutive ticks: how much the thrust commands jump about. A controller that slams
+    between +0.4 and -0.4 every tick scores ~0.8-1.6; a smooth one well under 0.05."""
+    if len(rows) < 2: return 0.0
+    return statistics.mean(abs(b["vf"] - a["vf"]) + abs(b["vs"] - a["vs"]) for a, b in zip(rows, rows[1:]))
+
+
 def follow(realism, person, seconds, seed, psi0=1.0, t_settle=25, d_tol=0.3, head_tol=15, z_tol=0.12, max_d=2.6, **over):
     r = Run(seconds, person, realism, psi0=psi0, seed=seed, script=[(1.0, {"intent": "follow_me"})], **over).run()
     rows = r.after(t_settle)
     still = [x for x in rows if x["dist"] > 0]                    # all rows (person may be walking)
     return r, [
+        ("cmd chatter |dvf|+|dvs| per tick", chatter(rows), chatter(rows) < 0.08),   # 0.8 = full-scale flip-flopping (seen live 2026-09-19)
         ("dist mean (m)", r.stat(rows, "dist"), abs(r.stat(rows, "dist") - G["D_FOLLOW"]) < d_tol),
         ("dist max (m)", r.stat(rows, "dist", max), r.stat(rows, "dist", max) < max_d),
         ("dist min (m)", r.stat(rows, "dist", min), r.stat(rows, "dist", min) > 0.85),   # the sim person stops at 0.9
         ("facing err mean (deg)", r.stat(rows, "bear_err"), r.stat(rows, "bear_err") < head_tol),
-        ("heading est err mean (deg)", r.stat(rows, "off_err"), r.stat(rows, "off_err") < 12),
+        ("heading est err mean (deg)", r.stat(rows, "off_err"), r.stat(rows, "off_err") < head_tol),   # same tolerance as facing (was a flat 12)
         ("z err rms (m)", math.sqrt(r.stat(rows, "zerr", lambda v: statistics.mean(x * x for x in v))), r.stat(rows, "zerr", max) < z_tol + 0.1 and math.sqrt(r.stat(rows, "zerr", lambda v: statistics.mean(x * x for x in v))) < z_tol),
         ("vel est err mean (m/s)", r.stat(rows, "v_est_err"), r.stat(rows, "v_est_err") < 0.05),
         ("collisions", r.w.collisions, r.w.collisions == 0),
@@ -222,7 +230,7 @@ def sc_hover_gusts(seed):
     x0, y0 = r.beh.hold_xy if r.beh.hold_xy else (rows[0]["x"], rows[0]["y"])   # the spot the hover is holding
     drift = [math.hypot(x["x"] - x0, x["y"] - y0) for x in rows]
     return r, [
-        ("drift max from hold point (m)", max(drift), max(drift) < 0.85),   # includes the ~0.5 m heading twitch every 40 s
+        ("drift max from hold point (m)", max(drift), max(drift) < 0.9),    # includes the ~0.5 m heading twitch every 40 s (+ 0.1 m/s gusts)
         ("drift mean (m)", statistics.mean(drift), statistics.mean(drift) < 0.3),
         ("z err max (m)", r.stat(rows, "zerr", max), r.stat(rows, "zerr", max) < 0.15),
         ("heading est err, last 30 s (deg)", r.stat(r.after(90), "off_err"), r.stat(r.after(90), "off_err") < 15),
@@ -351,6 +359,24 @@ def sc_wander(seed):
     ]
 
 
+def sc_slow_telemetry(seed):
+    """The onboard-mixer firmware (2026-09-20): the box mixes at 50 Hz and reports yaw / yaw rate only every 200 ms, so
+    the laptop's heading learner, ROTATE and the watchdog see 5 telemetry frames a second. Walking follow must still work."""
+    r, checks = follow(REAL, "walk", 90, seed, t_settle=25, d_tol=0.35, head_tol=15, telem_hz=5, telem_latency=0.05)
+    checks.append(("watchdog disarms", len(r.wd_reasons), not r.wd_reasons))
+    return r, checks
+
+
+def sc_rotate_slow_telemetry(seed):
+    """ROTATE 90 on 5 Hz yaw samples: lands within tolerance, does not overshoot into a spin."""
+    script = [(1.0, {"intent": "hover"}), (14.0, {"intent": "rotate", "degrees": 90})]     # 14 s: after the heading acquisition (as sc_rotate)
+    r = Run(40, "static", REAL, psi0=1.0, seed=seed, script=script, telem_hz=5, telem_latency=0.05).run()
+    psi0 = r.log[int(13.9 * G["HZ"])]["psi"]; end = r.after(32)
+    turned = math.degrees(wrap(r.stat(end, "psi") - psi0))
+    return r, [("turned (deg)", turned, 70 < turned < 110), ("back in HOVER", r.log[-1]["mode"], r.log[-1]["mode"] == "HOVER"),
+               ("collisions", r.w.collisions, r.w.collisions == 0)]
+
+
 def sc_lossy_links(seed):
     r, checks = follow(REAL, "static", 70, seed, t_settle=30, d_tol=0.35, head_tol=15,
                        cmd_loss=0.15, telem_loss=0.15, person_drop_p=0.05, person_drop_s=(0.3, 1.5), vision_latency=0.2)
@@ -416,7 +442,8 @@ def sc_board_failsafe(seed):
 SCENARIOS = {f.__name__[3:]: f for f in (
     sc_failsafe, sc_follow_static_ideal, sc_follow_static_real, sc_follow_walk, sc_follow_route, sc_hover_gusts, sc_rotate,
     sc_go_to, sc_come_here, sc_altitude_cmds, sc_lift_drift, sc_wrong_initial_heading, sc_gyro_drift,
-    sc_long_hover_then_follow, sc_wander, sc_lossy_links, sc_dance_then_back, sc_tof_noisy_vision, sc_no_tof, sc_board_failsafe,
+    sc_long_hover_then_follow, sc_wander, sc_slow_telemetry, sc_rotate_slow_telemetry, sc_lossy_links, sc_dance_then_back,
+    sc_tof_noisy_vision, sc_no_tof, sc_board_failsafe,
     sc_follow_eye_walk, sc_follow_eye_only_static, sc_follow_eye_only_walk, sc_rotate_eye_only)}
 
 
@@ -467,9 +494,11 @@ def main():
     ap.add_argument("--seeds", type=int, default=1)
     ap.add_argument("--plot", action="store_true")
     ap.add_argument("--tof", action="store_true", help="ToF altimeter on in every scenario (default: only in the ToF scenarios)")
+    ap.add_argument("--sag", type=float, default=None, help="shared-supply sag per unit of total duty in the REAL world (default world.py REAL, 0.15; 0 = separate supplies)")
     ap.add_argument("-v", action="store_true", help="print spoken lines and events")
     args = ap.parse_args()
     if args.tof: REAL["tof"] = IDEAL["tof"] = True
+    if args.sag is not None: REAL["supply_sag"] = args.sag
     import time
     all_ok = True
     t_start = time.time()

@@ -1,0 +1,9 @@
+{
+  "measured": "2026-09-20 (bench, by hand: which way the balloon actually flew for a positive percent)",
+  "pct": 30,
+  "MOTORS": {"L": "F", "R": "D", "S": "E", "V": "C"},
+  "SIGN": {"L": -1, "R": -1, "S": 1, "V": 1},
+  "GYRO_SIGN": 1,
+  "letters": {"C": "V+", "D": "R-", "E": "S+", "F": "L-"},
+  "note": "C = the propeller under the gondola: C+ flies UP. E = the motor on the side: E+ flies LEFT. D = rear right, F = rear left: D+ / F+ fly BACKWARD, so our forward is D- / F-. Left/right as seen from behind the gondola looking forward. Confirm after flashing: python tools/motor_map.py --check. Re-run python tools/motor_map.py after any rewiring; config.BLE reads this file and the bridge sends it to the box as MAP on every connection."
+}

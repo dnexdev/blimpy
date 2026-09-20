@@ -11,7 +11,7 @@ plus the altimeter fly FOLLOW / ROTATE / HOVER-still; GO_TO and WANDER are refus
 import math, random, time
 from .. import config
 from .protocol import clamp, wrap
-from .follow_me import AltHold, clearance, follow_cmd, lin, nearest_surface, room_ahead, velocity_cmd
+from .follow_me import AltHold, clearance, follow_cmd, lin, nearest_surface, ramp, room_ahead, velocity_cmd
 
 G = config.FOLLOW
 F = config.FPV
@@ -49,6 +49,7 @@ class Behaviors:
         self.fpv_r = None; self.fpv_rr = 0.0; self._t_fpv_r = -1e9   # range track (alpha-beta): closing speed without a world velocity
         self._t_fix = -1e9                                  # last direct heading fix from the eye + room camera
         self.search_dir = 1                                 # eye lost the person: yaw slowly toward where it last saw them
+        self._sm, self._t_sm = (0.0, 0.0), None             # low-pass state of the forward / sideways commands (_smooth)
 
     # ------------------------------------------------------------ inputs
     def on_person(self, xyz, t_ms=None):
@@ -116,6 +117,26 @@ class Behaviors:
 
     def on_armed(self, est):
         if est.p is not None: self.home = (est.p[0], est.p[1])
+        self._sm, self._t_sm = (0.0, 0.0), None
+
+    def _smooth(self, vf, vs, now):
+        """First-order low-pass (config FOLLOW CMD_TAU_S) on the forward / sideways commands, then the motor-start cut.
+        The velocity loop's tick-to-tick jitter (estimate noise x K_V) must not reach the props as a 15 Hz buzz.
+        The heading twitch goes through it too (TWITCH_S is longer by the filter's lag): a crisp twitch taught the hover
+        better but mis-taught a walking follow, where it lands as a step on a command that is already turning; the
+        learner's `clean` weight is what makes a rounded push teach (estimator._learn_heading)."""
+        dt = 0.0 if self._t_sm is None else min(0.5, max(0.0, now - self._t_sm)); self._t_sm = now
+        tau = G.get("CMD_TAU_S", 0.0)
+        k = 1.0 if tau <= 0 or dt <= 0 else dt / (tau + dt)
+        self._sm = (self._sm[0] + k * (vf - self._sm[0]), self._sm[1] + k * (vs - self._sm[1]))
+        return tuple(x if abs(x) >= G["DUTY_MIN"] else 0.0 for x in self._sm)
+
+    def _person_ff(self):
+        """The person's walking velocity as feed-forward, faded in over config FOLLOW PV_GATE (a standing person's
+        position noise must not become a velocity; a step at one speed jumped v_des by 0.1 m/s)."""
+        sp = math.hypot(*self.person_v)
+        k = ramp(sp, *G.get("PV_GATE", (0.05, 0.15)))
+        return (self.person_v[0] * k, self.person_v[1] * k)
 
     def handle(self, it, est):
         """Apply an intent dict from laptop/voice/intent.py. Returns the sentence to speak."""
@@ -173,6 +194,7 @@ class Behaviors:
         self._tick_timers(now)
         vf = vs = yr = vz = 0.0; note = self.mode
         if est.p is None:
+            self._sm = (0.0, 0.0)
             return 0.0, 0.0, 0.0, 0.0, "no balloon"
         rel = getattr(est, "rel", False)                         # no room camera: x/y and heading are meaningless
         person_ok = self.person is not None and now - self.t_person < G["PERSON_LOST_MS"] / 1000
@@ -196,21 +218,24 @@ class Behaviors:
         kw["v_extra"] = kwp["v_extra"] = self.v_tw
         hold_z = True
         if est.psi is not None and not confident and not rel:
-            vf, vs = self._acquire(est, now); note = f"{self.mode} (learning heading: {self.acq_note})"
+            # the person is a wall too for the blind pushes; a body is ~0.2 m across here (0.35 is the follow-dodge margin, and
+            # with it a balloon starting 1.2 m from the person had every second push cut short and gave up on a wrong heading)
+            obs_acq = self.obstacles + ([(self.person[0], self.person[1], 0.2)] if person_ok else [])
+            vf, vs = self._acquire(est, now, obs_acq); note = f"{self.mode} (learning heading: {self.acq_note})"
+            self.stuck_since = self.wander_stuck = now             # GO_TO / WANDER have not started yet: their "stuck" clocks wait
             vz = self.alt.cmd(z_target, est, now)
             self._focus_guard(now, person_ok)
+            vf, vs = self._smooth(vf, vs, now)
             return vf, vs, 0.0, vz, note                        # no rotating / travelling until we know which way is which
 
         if self.mode == "FOLLOW":
             if eye:
                 vf, yr, note = self._follow_eye(now); self.hold_xy = None        # the eye owns the yaw (seen directly)
                 if person_ok and have_heading:                                    # room camera too: the world-frame law moves us
-                    pv = self.person_v if math.hypot(*self.person_v) > 0.1 else (0.0, 0.0)   # (walls, dodging, the person's speed)
-                    vf, vs, _, vz, d = follow_cmd(est, self.person, person_v=pv, v_max=vcap, **kw); hold_z = False
-                    note = f"FOLLOW eye+room d={d['dist']:.2f}"
+                    vf, vs, _, vz, d = follow_cmd(est, self.person, person_v=self._person_ff(), v_max=vcap, **kw); hold_z = False
+                    note = f"FOLLOW eye+room d={d['dist']:.2f}"                   # (walls, dodging, the person's speed)
             elif person_ok and have_heading:
-                pv = self.person_v if math.hypot(*self.person_v) > 0.1 else (0.0, 0.0)   # standing: no feed-forward noise
-                vf, vs, yr, vz, d = follow_cmd(est, self.person, person_v=pv, v_max=vcap, **kw); hold_z = False; self.hold_xy = None
+                vf, vs, yr, vz, d = follow_cmd(est, self.person, person_v=self._person_ff(), v_max=vcap, **kw); hold_z = False; self.hold_xy = None
                 note = f"FOLLOW d={d['dist']:.2f}"
             elif rel:
                 yr = F["SEARCH_YR"] * self.search_dir; note = "FOLLOW (eye lost the person: searching)"
@@ -276,18 +301,24 @@ class Behaviors:
         if have_heading: yr += est.bias_hat                  # hold a TRUE zero yaw rate despite gyro bias (YR_MAX = 1 rad/s)
         if self.v_tw != (0.0, 0.0): note += " +twitch"
         self._focus_guard(now, person_ok)
+        vf, vs = self._smooth(vf, vs, now)
         return vf, vs, yr, vz, note
 
     ACQ_DIRS = ((0.3, 0.0), (-0.39, 0.0), (0.0, 0.42), (0.0, -0.5))   # body pushes of ~equal acceleration
 
-    def _acquire(self, est, now):
+    def _acquire(self, est, now, obstacles=None):
         """Heading unknown (first arm / after `forget_heading`): push along one body axis until the learner has it.
         PROBE ~2.5 s, then look at the room ahead along the direction we actually started moving: plenty -> COMMIT
         (keep pushing), little -> the opposite axis is the safe one. Every push ends with a BRAKE on the opposite of
         the axis that produced the motion (correct whatever the estimate is; a keel-less balloon must never coast).
         Converged = the estimate has held still for 2.5 s while lessons kept coming. NEVER brake with the velocity
-        loop while the heading is unknown (that can be full throttle into a wall). Gives up after 6 pushes."""
+        loop while the heading is unknown (that can be full throttle into a wall). Gives up after 6 pushes.
+        `obstacles` = walls + pillars + the person: never push INTO the person (a blind push drove through their spot,
+        2026-09-20 seed sweep). The touching / probe logic below uses the walls and pillars only: a balloon that starts
+        next to the person is not "touching", it just must not push their way."""
+        obstacles = self.obstacles if obstacles is None else obstacles
         gap, nx, ny = nearest_surface(est.p, self.obstacles, self.arena)
+        gap_p, npx, npy = nearest_surface(est.p, obstacles, self.arena)
         lessons = getattr(est, "lessons_total", 0)
         self.acq_hist.append((now, est.offset, lessons, est.speed))
         while self.acq_hist and now - self.acq_hist[0][0] > 3.0:
@@ -295,7 +326,7 @@ class Behaviors:
         old = next((h for h in self.acq_hist if now - h[0] >= 2.5), None)
         converged = est.head_ok and old is not None and abs(wrap(est.offset - old[1])) < 0.1 and lessons - old[2] >= 3
         if self.acq_t0 is None:
-            self.acq_i = self._acq_pick(est, nx, ny, None)
+            self.acq_i = self._acq_pick(est, nx, ny, None, obstacles)
             self._acq_start(est, now, "probe" if gap < 1.5 else "commit")
         age = now - self.acq_t0
         moved = math.hypot(est.p[0] - self.acq_p0[0], est.p[1] - self.acq_p0[1])
@@ -306,7 +337,7 @@ class Behaviors:
                 if self.acq_after == "reverse":
                     self.acq_i ^= 1; self._acq_start(est, now, "commit")
                 else:
-                    self.acq_i = self._acq_pick(est, nx, ny, self.acq_i); self._acq_start(est, now, "probe" if gap < 1.5 else "commit")
+                    self.acq_i = self._acq_pick(est, nx, ny, self.acq_i, obstacles); self._acq_start(est, now, "probe" if gap < 1.5 else "commit")
                 self.acq_n += 1; self.acq_note = "next push"
                 return (0.0, 0.0)
             self.acq_note = f"brake axis {self.acq_i % 4}"
@@ -315,11 +346,17 @@ class Behaviors:
         if converged:                                           # good estimate: stop pushing, kill the speed, done
             self._acq_brake(now, "done"); return (0.0, 0.0)
         sp = est.speed
-        room = room_ahead(est.p, (est.v[0] / sp, est.v[1] / sp), self.obstacles, self.arena) if sp > 0.12 else 9.0
+        room = room_ahead(est.p, (est.v[0] / sp, est.v[1] / sp), obstacles, self.arena) if sp > 0.06 else 9.0
         old_sp = next((h[3] for h in self.acq_hist if now - h[0] >= 0.6), None)
         if room < 0.7 and age > 0.8 and old_sp is not None and est.speed > old_sp + 0.01:
             # heading into something AND this push is what speeds us up (needs no heading estimate)
             self._acq_brake(now, "reverse"); self.acq_note = "room ahead low -> brake"
+            return (0.0, 0.0)
+        closing = -(est.v[0] * npx + est.v[1] * npy)            # m/s toward the nearest surface (person included), whatever the heading estimate says
+        if gap_p < 0.35 and closing > 0.03 and age > 0.6:
+            # near a surface and drifting into it (a blind push can only be judged by where it is taking us; with the shared
+            # supply it speeds up slowly, so the room-ahead rule above came too late: a graze at 0.1 m/s, 2026-09-20)
+            self._acq_brake(now, "reverse"); self.acq_note = "closing on a surface -> brake"
             return (0.0, 0.0)
         if self.acq_phase == "probe" and age >= 2.5:            # the velocity estimate lags ~1 s: give it time to show
             if room >= 1.0:                                     # heading somewhere open: keep pushing
@@ -375,16 +412,17 @@ class Behaviors:
         bearing = math.atan2(xy[1] - est.p[1], xy[0] - est.p[0])
         return clamp(G["K_PSI"] * wrap(bearing - est.psi), -0.3, 0.3)
 
-    def _acq_pick(self, est, nx, ny, avoid_i):
+    def _acq_pick(self, est, nx, ny, avoid_i, obstacles=None):
         """Next body axis to push along. With a rough estimate, prefer the one pointing away from the nearest
         surface; with none, cycle. Never repeat the axis that just failed."""
+        obstacles = self.obstacles if obstacles is None else obstacles
         order = [0, 1, 2, 3] if avoid_i is None else [(avoid_i + k) % 4 for k in (1, 2, 3)]
         if est.head_ok and est.psi is not None:                 # rough estimate: prefer the axis with the most room ahead
             c, s_ = math.cos(est.psi), math.sin(est.psi)
             def room(i):
                 bx, by = (1.0, 0.0) if i in (0, 1) else (0.0, 1.0)
                 if i in (1, 3): bx, by = -bx, -by
-                return room_ahead(est.p, (bx * c - by * s_, bx * s_ + by * c), self.obstacles, self.arena)
+                return room_ahead(est.p, (bx * c - by * s_, bx * s_ + by * c), obstacles, self.arena)
             order.sort(key=room, reverse=True)
         return order[0]
 
@@ -428,10 +466,10 @@ class Behaviors:
         yr = clamp(F["K_PSI"] * o["bearing"], -G["YR_CAP"], G["YR_CAP"])
         r = self.fpv_r if self.fpv_r is not None else 0.9            # box cut by the frame = closer than we can measure
         err = r - G["D_FOLLOW"]                                       # + = too far
-        sp = 0.0
-        if abs(err) > G["D_DEADBAND"]:
-            sp = clamp(G["K_P"] * err, -G["V_DES_MAX"], G["V_DES_MAX"])
-            brake = math.sqrt(2 * G["A_BRAKE"] * max(0.0, abs(err) - G["D_DEADBAND"] / 2))
+        sp = 0.0; db = G["D_DEADBAND"]
+        if abs(err) > db / 2:                                         # full K_P beyond the band, faded in over its outer half
+            sp = clamp(G["K_P"] * err * ramp(abs(err), db / 2, db), -G["V_DES_MAX"], G["V_DES_MAX"])
+            brake = math.sqrt(2 * G["A_BRAKE"] * (abs(err) - db / 2))
             sp = math.copysign(min(abs(sp), brake), sp)
         u = G["K_V"] * (sp + self.fpv_rr)                              # closing speed = -d(range)/dt
         if u < 0: u /= REV_EFF
@@ -445,11 +483,11 @@ class Behaviors:
         if self.hold_xy is None:
             self.hold_xy = (est.p[0], est.p[1])
         ex, ey = self.hold_xy[0] - est.p[0], self.hold_xy[1] - est.p[1]
-        d = math.hypot(ex, ey)
-        if d < G["HOLD_DEADBAND"]:
+        d = math.hypot(ex, ey); db = G["HOLD_DEADBAND"]
+        if d < db / 2:
             v_des = (0.0, 0.0)
-        else:
-            sp = min(G["K_P"] * d, math.sqrt(2 * G["A_BRAKE"] * max(0.0, d - G["HOLD_DEADBAND"] / 2)), G["HOLD_V_MAX"])
+        else:                                                         # full K_P beyond the band, faded in over its outer half
+            sp = min(G["K_P"] * d * ramp(d, db / 2, db), math.sqrt(2 * G["A_BRAKE"] * (d - db / 2)), G["HOLD_V_MAX"])
             v_des = (ex / d * sp, ey / d * sp)
         v_des = (v_des[0] + self.v_tw[0], v_des[1] + self.v_tw[1])
         return velocity_cmd(est, v_des, self.obstacles, self.arena, self.avoid_sides)

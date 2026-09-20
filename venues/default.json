@@ -8,11 +8,11 @@
     "max": [4.5, 2.0]
   },
   "obstacles": [
-    {"name": "judges_table", "x": 4.0, "y": 0.0, "r": 0.45}
+    {"name": "judges_table", "x": 4.05, "y": 0.0, "r": 0.45}
   ],
   "places": {
     "judges": [2.5, 0.0]
   },
   "wander": null,
-  "notes": "PLACEHOLDERS: tape-measure on site, or  python -m laptop.positioning.capture_place <name> --xy X Y"
+  "notes": "PLACEHOLDERS: tape-measure on site, or  python -m laptop.positioning.capture_place <name> --xy X Y. Table moved 4.0 -> 4.05 on 2026-09-20: the balloon is 1.15 m now, so a place must be >= R_BALLOON + 0.5 = 1.075 m from the table edge"
 }

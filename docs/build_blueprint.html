@@ -409,7 +409,7 @@ python -m laptop.control.teleop            # terminal 2: SPACE arms</pre>
       <p>Tape from the floor to the balloon's equator and to the motor plane. <code>ARM_BELOW</code> = equator minus motor plane; the inflated diameter into <code>D</code> (no ultrasonic on this box, so <code>TOF_BELOW</code> stays). All into <code>PHYS</code> and <code>calib/MEASUREMENTS.md</code>.</p>
     </li>
     <li><strong>Rerun the simulator with the real numbers</strong>
-      <pre>python tools/scenarios.py --seeds 3
+      <pre>python archive/tools/scenarios.py --seeds 3
 python tools/control_test.py</pre>
     </li>
     <li><strong>First flight: hover only</strong>
@@ -470,7 +470,7 @@ python -m laptop.control.pilot --no-voice            # terminal 3: SPACE arms; t
     <tr><td>gyro sign</td><td><code>BLE GYRO_SIGN</code></td><td>the bridge</td></tr>
     <tr><td>walls, table, judges' spot</td><td><code>venues/default.json</code></td><td>avoidance, go-to</td></tr>
   </table></div>
-  <p>Every measured value also gets a dated row in <code>calib/MEASUREMENTS.md</code>. After changing PHYS, run <code>python tools/scenarios.py --seeds 3</code> and <code>python tools/control_test.py</code>.</p>
+  <p>Every measured value also gets a dated row in <code>calib/MEASUREMENTS.md</code>. After changing PHYS, run <code>python archive/tools/scenarios.py --seeds 3</code> and <code>python tools/control_test.py</code>.</p>
 
   <h2>9. Before the first flight, in one place</h2>
   <div class="callout ok"><strong>Go / no-go.</strong>

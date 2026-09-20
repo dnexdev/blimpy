@@ -1,22 +1,27 @@
 """BLE bridge: the laptop side of the gondola's Bluetooth firmware. Everything above it (teleop, follow_me, pilot, the
-estimator, the telemetry watchdog, the scenario suite) keeps speaking PROTOCOL.md over UDP; this process turns that into
-the firmware's per-motor percentages and turns the firmware's IMU lines back into telemetry.
+estimator, the telemetry watchdog) keeps speaking PROTOCOL.md over UDP; this process turns that into the firmware's
+commands and turns the firmware's telemetry lines back into PROTOCOL.md telemetry.
 
-    udp 5005 command {vf,vs,yr,vz,arm} --> mixer (50 Hz, yaw-rate PI on the IMU) --> "MOTORS c d e f" over BLE (20 Hz)
-    BLE IMU notifications -----------> laptop/control/imu_store (latest/history/subscribe, http :5008) --> udp 5006 telemetry
+Two firmware generations, told apart from the first telemetry line (`st:` present = onboard mixer):
+  onboard mixer (firmware/esp32_master.ino, 2026-09-20):
+    udp 5005 command {vf,vs,yr,vz,arm} --> "CMD vf vs yr vz" (percent, 10 Hz) over BLE; the BOX runs the 50 Hz mixer
+    on its own gyro, slews, times out after 500 ms. "MAP LC+ RD+ SE+ VF+ G+" (config.BLE MOTORS / SIGN / GYRO_SIGN,
+    normally from calib/motor_map.json) is sent on every connection. Telemetry every 200 ms: heading integrated on the box.
+  earlier builds (per-motor percentages only):
+    udp 5005 --> mixer HERE (50 Hz, yaw-rate PI on the IMU stream) --> "MOTORS c d e f" over BLE (20 Hz)
+  both: BLE telemetry --> laptop/control/imu_store (latest/history/subscribe, http :5008) --> udp 5006 telemetry
 
   python -m laptop.control.ble_gondola                    # scan by service UUID, connect, bridge. Then run teleop / pilot as usual
-  python -m laptop.control.ble_gondola --fake --sim       # no hardware: same bridge on the simulated balloon (state on 5007)
-  python -m laptop.control.ble_gondola --probe            # connect and print raw IMU lines for 10 s (set config.BLE IMU_FIELDS)
-  python -m laptop.control.ble_gondola --motor C 30       # bench: one motor at 30 % for 2 s (--secs 10 for a meter), then STOP (which letter is which?)
+  python -m laptop.control.ble_gondola --probe            # connect and print raw telemetry lines for 10 s + a rate verdict
+  python -m laptop.control.ble_gondola --motor C 30       # bench: one motor LETTER at 30 % for 2 s (--secs 10 for a meter), then STOP
+  python tools/motor_map.py                               # which letter is which motor, which way: writes calib/motor_map.json
+  python -m laptop.control.ble_gondola --fake --sim       # archived simulator behind the same bridge (archive/README.md)
 
-Firmware command text (write-without-response on COMMAND_UUID): "C 40" / "D -40" / "E 50" / "F 100" (one motor, percent,
-sign = direction), "ALL 30", "MOTORS c d e f" (percent for C D E F), "STOP". Telemetry characteristic notifies one IMU text
-line per sample. Motor letters <-> our L/R/S/V, signs and IMU layout live in config.BLE: VERIFY them on the bench.
+Firmware command text (write-without-response on COMMAND_UUID): "CMD 20 0 0 0", "MAP ...", "STATUS" (onboard mixer);
+"C 40" / "D -40" / "E 50" / "F 100" (one motor, percent, sign = direction), "ALL 30", "MOTORS c d e f", "STOP" (all builds).
 
-Failsafe lives HERE now: no command for FAILSAFE_MS (500) or arm 0 or BLE lost -> STOP, mixer reset, armed 0 in telemetry.
-The firmware keeps the last percentages if THIS process dies, so keep a STOP key handy and ask the hardware team for a
-command timeout in the firmware too.
+Failsafe: no command from the laptop for FAILSAFE_MS (500) or arm 0 or BLE lost -> STOP, armed 0 in telemetry. The onboard
+mixer also stops on its own 500 ms after the last CMD (an earlier build keeps the last percentages if THIS process dies).
 """
 import argparse, asyncio, json, math, queue, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -45,6 +50,17 @@ def motors_line(pct):
     return "MOTORS " + " ".join(str(pct[l]) for l in LETTERS)
 
 
+def map_line():
+    """The onboard mixer's MAP command from config.BLE: which letter plays L/R/S/V, its sign, and the gyro sign."""
+    roles = " ".join(f"{n}{B['MOTORS'][n]}{'-' if B['SIGN'][n] < 0 else '+'}" for n in ("L", "R", "S", "V"))
+    return f"MAP {roles} G{'-' if B.get('GYRO_SIGN', 1) < 0 else '+'}"
+
+
+def cmd_line(sp):
+    """Setpoints (vf, vs, yr, vz) in [-1, 1] -> "CMD vf vs yr vz" in percent for the onboard mixer."""
+    return "CMD " + " ".join(str(int(round(clamp(v, -1, 1) * 100))) for v in sp)
+
+
 # ---------------------------------------------------------------------------------------------------- transports
 class Transport:
     """What the bridge needs from a link: connected flag, send(text), on_line(text) callback, connects counter."""
@@ -71,10 +87,15 @@ def probe_verdict(got, secs):
     if n == 0: return f"[probe] 0 lines in {secs:.0f} s: nothing arrived. Is the telemetry characteristic notifying?"
     gaps = sorted(b - a for a, b in zip(ok, ok[1:]))
     hz = n / secs
-    need = 1000.0 / B.get("IMU_FRESH_MS", 200)      # below this the mixer runs open loop (no yaw-rate feedback)
+    need = 1000.0 / B.get("IMU_FRESH_MS", 200)      # below this the laptop mixer runs open loop (no yaw-rate feedback)
     s = f"[probe] {n} lines in {secs:.0f} s = {hz:.1f} per second"
     if gaps: s += f", gap median {1000 * gaps[len(gaps) // 2]:.0f} ms max {1000 * gaps[-1]:.0f} ms"
     if n - len(ok): s += f", {n - len(ok)} not parsed"
+    if any(d is not None and "st" in d for _, d in got):     # the onboard mixer: 5 lines a second is by design
+        last = next(d for _, d in reversed(got) if d is not None and "st" in d)
+        return s + (f": OK, onboard mixer (the box closes the yaw loop itself; yaw {last.get('yaw', float('nan')):+.1f} deg, "
+                    f"gyro zero {last.get('bias', float('nan')):+.2f} deg/s, motors C{last.get('mc', 0):+.0f} D{last.get('md', 0):+.0f} "
+                    f"E{last.get('me', 0):+.0f} F{last.get('mf', 0):+.0f})" + ("" if hz >= 3 else "; SLOW even for that, expected 5"))
     if hz >= 20: return s + ": OK"
     if hz >= need: return s + ": SLOW (flies, but ask the hardware team for one notification per IMU sample, 20-50 per second)"
     return s + (f": TOO SLOW: the yaw loop runs blind below {need:.0f} per second. Ask the hardware team to notify every IMU sample "
@@ -152,7 +173,7 @@ class BleakTransport(Transport):
 
 
 class SimTransport(Transport):
-    """Stand-in robot: the firmware's text commands drive laptop/sim/world.py motor by motor, and its IMU lines come
+    """Stand-in robot: the firmware's text commands drive archive/sim/world.py motor by motor, and its IMU lines come
     from the simulated gyro. --sim publishes the world state on 5007 like fake_esp32 does."""
     IMU_HZ = 20
 
@@ -227,6 +248,8 @@ class SimTransport(Transport):
 
 # ---------------------------------------------------------------------------------------------------- the bridge
 class Bridge:
+    onboard, board = None, {}          # defaults for a Bridge built without __init__ (tests)
+
     def __init__(self, transport, http_port=None, log=print, telem_hz=20):
         self.tr, self.log = transport, log
         self.cmd_in, self.out = UdpJson(CMD_PORT), UdpJson()
@@ -238,6 +261,9 @@ class Bridge:
         self.alt, self.t_alt = -1.0, None                         # downward ultrasonic in the IMU line (config.BLE ALT_KEYS), m
         self.last_pct, self.last_line, self.t_sent = None, None, -1e9
         self.telem_hz = telem_hz; self.n_tel = 0; self.age_ms = -1
+        # Which firmware: None = no telemetry seen yet on this connection, True = onboard mixer (CMD), False = laptop mixer (MOTORS)
+        self.onboard = None; self.board = {}; self._connects_seen = 0; self._t_map = -1e9; self._maps_sent = 0
+        self.last_cmd, self.t_cmd = None, -1e9
         self.stop = threading.Event()
         self.http = None
         self._unsub = imu_store.subscribe(self._on_imu)
@@ -266,11 +292,24 @@ class Bridge:
 
     def _on_imu(self, d):
         t, sg = d["t"], B.get("GYRO_SIGN", 1)
-        if "gz_rad" in d: self._zero_gyro(t, d["gz_rad"])
-        gz = (d.get("gz_rad", 0.0) - self.gz_bias) * sg
-        if "yaw_rad" in d: self.yaw = wrap(d["yaw_rad"] * sg)
-        elif "gz_rad" in d and self.t_imu is not None: self.yaw = wrap(self.yaw + gz * min(0.2, max(0.0, t - self.t_imu)))
-        self.gz = gz; self.pitch = d.get("pitch_rad", 0.0); self.roll = d.get("roll_rad", 0.0)
+        onboard = "st" in d                                   # the onboard mixer's line carries its state; older builds only the IMU
+        if onboard != self.onboard:
+            self.onboard = onboard
+            self.log("[bridge] firmware: " + ("ONBOARD MIXER (the box mixes; sending CMD setpoints, MAP " + map_line()[4:] + ")" if onboard
+                                              else "per-motor percentages only (mixing on the laptop, sending MOTORS lines)"))
+        if onboard:
+            self.board = {k: d[k] for k in ("st", "age", "mc", "md", "me", "mf", "bias", "yaw") if k in d}
+            k = math.pi / 180.0 if B.get("GYRO_UNITS", "deg") == "deg" else 1.0
+            if "yaw_rad" in d: self.yaw = d["yaw_rad"]         # integrated on the box at 50 Hz, gyro zero and sign already applied
+            if "gzc" in d: self.gz = d["gzc"] * k
+            elif "gz_rad" in d: self.gz = (d["gz_rad"] - d.get("bias", 0.0) * k) * sg
+        else:
+            if "gz_rad" in d: self._zero_gyro(t, d["gz_rad"])
+            gz = (d.get("gz_rad", 0.0) - self.gz_bias) * sg
+            if "yaw_rad" in d: self.yaw = wrap(d["yaw_rad"] * sg)
+            elif "gz_rad" in d and self.t_imu is not None: self.yaw = wrap(self.yaw + gz * min(0.2, max(0.0, t - self.t_imu)))
+            self.gz = gz
+        self.pitch = d.get("pitch_rad", 0.0); self.roll = d.get("roll_rad", 0.0)
         self.t_imu = t
         for k in B.get("ALT_KEYS", ()):
             if k in d:
@@ -287,48 +326,72 @@ class Bridge:
 
     # ---- one 50 Hz tick
     def tick(self, t):
+        if self.tr.connected and self.tr.connects != self._connects_seen:      # a (re)connection: which firmware is unknown again
+            self._connects_seen = self.tr.connects
+            self.onboard, self.board, self._maps_sent, self._t_map = None, {}, 0, -1e9
+        if self.tr.connected and self._maps_sent < 2 and t - self._t_map >= 1.0:   # the map, twice, on every connection
+            self._send(map_line(), t); self._maps_sent += 1; self._t_map = t       # (an older build answers "Unknown command")
         r = self.cmd_in.recv_latest()
         if r:
             d = r[0]; self.sender = r[1][0]
             self.sp = tuple(clamp(float(d.get(k, 0.0)), -1, 1) for k in ("vf", "vs", "yr", "vz"))
             self.arm, self.rx_t = int(d.get("arm", 0)) == 1, t
         self.age_ms = int((t - self.rx_t) * 1000) if self.rx_t is not None else -1
-        ok = self.arm and 0 <= self.age_ms < FAILSAFE_MS and self.tr.connected
-        if ok:
+        ok = self.arm and 0 <= self.age_ms < FAILSAFE_MS and self.tr.connected and self.onboard is not None
+        silent = self.onboard and not (self.t_imu is not None and (t - self.t_imu) * 1000 < B.get("BOX_SILENT_MS", 1500))
+        if ok and silent: ok = False                            # the box stopped talking: do not fly it blind
+        if self.onboard:
+            # the box mixes; what we show as duties is what it last reported (up to 200 ms old)
+            b = self.board
+            self.cur = from_pct({"C": b.get("mc", 0), "D": b.get("md", 0), "E": b.get("me", 0), "F": b.get("mf", 0)}) if ok else (0.0, 0.0, 0.0, 0.0)
+            self.mix_state["yawI"] = 0.0
+        elif ok:
             fresh = self.imu_fresh(t)
             self.cur = mix(self.sp, (self.gz / YR_MAX) if fresh else 0.0, self.cur, self.mix_state if fresh else None)
             if not fresh: self.mix_state["yawI"] = 0.0
         else:
             self.cur, self.mix_state["yawI"] = (0.0, 0.0, 0.0, 0.0), 0.0
         if self.armed != ok:
-            self.log(f"[bridge] {'ARMED' if ok else f'MOTORS OFF (arm={int(self.arm)} age={self.age_ms} ms ble={int(self.tr.connected)})'}")
+            self.log(f"[bridge] {'ARMED' if ok else f'MOTORS OFF (arm={int(self.arm)} age={self.age_ms} ms ble={int(self.tr.connected)}'
+                     + (' box silent' if silent else '') + (' firmware unknown yet' if self.tr.connected and self.onboard is None else '') + ')'}")
         self.armed = ok
         # ---- motors out (rate-limited; STOP repeats slowly as a safety heartbeat)
-        if ok:
+        if ok and self.onboard:
+            line = cmd_line(self.sp)
+            if t - self.t_cmd >= 1.0 / B.get("CMD_HZ", 10) - 1e-3 or (line != self.last_cmd and t - self.t_cmd >= 0.05):
+                self._send(line, t); self.last_cmd, self.t_cmd = line, t
+        elif ok:
             pct = to_pct(self.cur)
             if t - self.t_sent >= 1.0 / B["HZ"] and (pct != self.last_pct or t - self.t_sent >= 0.25):
-                self._send(motors_line(pct)); self.last_pct = pct
+                self._send(motors_line(pct), t); self.last_pct = pct
         elif self.tr.connected and (self.last_line != "STOP" or t - self.t_sent >= 1.0):
-            self._send("STOP"); self.last_pct = None
+            self._send("STOP", t); self.last_pct = self.last_cmd = None
         # ---- telemetry out (PROTOCOL.md s3) to whoever commands us
         if self.sender and t >= getattr(self, "_next_tel", 0.0):
             self._next_tel = t + 1.0 / self.telem_hz
             self.out.send(self.telemetry(t), (self.sender, TELEM_PORT)); self.n_tel += 1
 
-    def _send(self, line):
-        if self.tr.send(line): self.last_line, self.t_sent = line, time.monotonic()
+    def _send(self, line, t=None):
+        if self.tr.send(line): self.last_line, self.t_sent = line, (time.monotonic() if t is None else t)
 
     def telemetry(self, t=None):
         t = time.monotonic() if t is None else t
         c = self.cur
+        st = int(self.board.get("st", -1)) if self.onboard else -1
+        # Onboard mixer: `armed` means the BOX says it is flying our setpoints (st 1). Until its first CMD lands and its
+        # next 200 ms line arrives it still says 0, hence config.FOLLOW BOARD_OFF_N. st 2 = the box timed out on us.
+        armed = self.armed and (not self.onboard or st == 1)
         return {"t": now_ms(), "yaw": round(self.yaw, 4), "yr": round(self.gz, 4), "pitch": round(self.pitch, 3),
-                "roll": round(self.roll, 3), "alt": self.alt_now(t), "vbat": -1, "armed": int(self.armed), "age": self.age_ms,
+                "roll": round(self.roll, 3), "alt": self.alt_now(t), "vbat": -1, "armed": int(armed), "age": self.age_ms,
                 "mL": round(c[0], 3), "mR": round(c[1], 3), "mS": round(c[2], 3), "mV": round(c[3], 3),
-                "imu_age": -1 if self.t_imu is None else int((t - self.t_imu) * 1000), "ble": int(self.tr.connected)}
+                "imu_age": -1 if self.t_imu is None else int((t - self.t_imu) * 1000), "ble": int(self.tr.connected),
+                "onboard": -1 if self.onboard is None else int(self.onboard), "st": st}
 
     def status(self):
         return {"connected": self.tr.connected, "connects": self.tr.connects, "armed": self.armed, "age_ms": self.age_ms,
                 "alt": self.alt_now(time.monotonic()),
+                "firmware": {None: "unknown", True: "onboard mixer", False: "laptop mixer"}[self.onboard], "box": dict(self.board),
+                "map": map_line(), "map_source": B.get("MAP_SOURCE"),
                 "setpoint": dict(zip(("vf", "vs", "yr", "vz"), self.sp)), "motors": to_pct(self.cur), "last_line": self.last_line,
                 "imu": imu_store.stats(), "error": getattr(self.tr, "last_error", None)}
 
@@ -387,7 +450,7 @@ def main():
     args = ap.parse_args()
 
     if args.fake:
-        from ..sim.world import IDEAL, REAL, World
+        from archive.sim.world import IDEAL, REAL, World
         world = World(dict(IDEAL if args.ideal else REAL, tof=args.tof, fpv=not args.no_fpv, vision=not args.no_vision),
                       person=args.person, psi0=args.psi0, seed=args.seed, epoch=time.monotonic())
         tr = SimTransport(world, publish_state=args.sim, imu_units=B["GYRO_UNITS"])
@@ -426,10 +489,13 @@ def main():
     br = Bridge(tr, http_port=None if args.no_http else B["HTTP_PORT"])
     print(f"[bridge] udp {CMD_PORT} -> {'simulated robot' if args.fake else 'BLE ' + (args.name or B['NAME'])} -> telemetry on {TELEM_PORT}"
           + ("" if args.no_http else f"   http://127.0.0.1:{B['HTTP_PORT']}/imu  /status") + "   (Ctrl+C = STOP + quit)")
+    print(f"[bridge] motor map {map_line()[4:]}   from {B.get('MAP_SOURCE')}")
+    if "NOT MEASURED" in str(B.get("MAP_SOURCE")) and not args.fake:
+        print("[bridge] WARNING: the letters <-> motors map is a placeholder. Do not fly on it: python tools/motor_map.py first.")
     th = threading.Thread(target=br.run, daemon=True); th.start()
     plot = None
     if args.plot and args.fake:
-        from ..sim.plot import Plot
+        from archive.sim.plot import Plot
         plot = Plot(world, "Blimpy simulator (BLE bridge)")
     try:
         next_print = 0.0
@@ -438,8 +504,9 @@ def main():
             if plot: plot.update(world)
             if time.monotonic() < next_print: continue
             next_print = time.monotonic() + 0.5
-            s = br.status(); m = s["motors"]
-            print(f"[bridge] {'BLE ' if s['connected'] else 'no link'} {'ARMED' if s['armed'] else 'off  '} age={s['age_ms']:5d} "
+            s = br.status(); m = s["motors"]; bx = s["box"]
+            fw = {"unknown": "fw?  ", "onboard mixer": f"box st{bx.get('st', '?')} ", "laptop mixer": "laptop"}[s["firmware"]]
+            print(f"[bridge] {'BLE ' if s['connected'] else 'no link'} {'ARMED' if s['armed'] else 'off  '} {fw} age={s['age_ms']:5d} "
                   f"C={m['C']:+4d} D={m['D']:+4d} E={m['E']:+4d} F={m['F']:+4d}  imu {s['imu']['hz']:4.1f} Hz age {s['imu']['age_ms']}  "
                   f"yaw={math.degrees(br.yaw):+4.0f}   ", end="\r", flush=True)
     except KeyboardInterrupt:

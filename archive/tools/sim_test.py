@@ -1,14 +1,14 @@
 """Headless regression test of the control stack over the real UDP protocol (no hardware, no keyboard).
 
-  python tools/sim_test.py          # over fake_esp32 (UDP board)
-  python tools/sim_test.py --ble    # over the BLE bridge + simulated robot (laptop/control/ble_gondola.py --fake --sim)
+  python archive/tools/sim_test.py          # over fake_esp32 (UDP board)
+  python archive/tools/sim_test.py --ble    # over the BLE bridge + simulated robot (laptop/control/ble_gondola.py --fake --sim)
 
 (1) Failsafe: arm + drive for 1.5 s, stop sending, measure time until telemetry reports armed=0 (must be ~500 ms).
 (2) Follow-me vs a walking person for 45 s: heading nudge, then hold distance/heading. Reports tracking stats.
 Uses fake_esp32 --sim as a subprocess. Run it after touching protocol.py, estimator.py, follow_me.py or the gains.
 """
 import math, os, pathlib, statistics, subprocess, sys, time
-ROOT = pathlib.Path(__file__).resolve().parents[1]
+ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT)); os.chdir(ROOT)
 from laptop import config
 from laptop.control.protocol import CMD_PORT, STATE_PORT, TELEM_PORT, UdpJson, make_cmd, now_ms, wrap
@@ -23,7 +23,7 @@ BLE = "--ble" in sys.argv          # run the same checks through the BLE bridge 
 
 
 def start_fake(*extra):
-    mod = ["laptop.control.ble_gondola", "--fake", "--sim", "--no-http"] if BLE else ["laptop.control.fake_esp32", "--sim"]
+    mod = ["laptop.control.ble_gondola", "--fake", "--sim", "--no-http"] if BLE else ["archive.fake_esp32", "--sim"]
     p = subprocess.Popen([sys.executable, "-m", *mod, *extra], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(1.5 if BLE else 1.0)
     return p

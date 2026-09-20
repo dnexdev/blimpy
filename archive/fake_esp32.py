@@ -1,11 +1,11 @@
 """Stand-in for the ESP32 gondola: runs the SAME mixer and failsafe as firmware/src/main.cpp, on a simulated
-balloon in a simulated room (laptop/sim/world.py), with realistic sensors by default.
+balloon in a simulated room (archive/sim/world.py), with realistic sensors by default.
 
-  python -m laptop.control.fake_esp32              protocol test: prints motor outputs, fake telemetry
-  python -m laptop.control.fake_esp32 --sim        + publishes world state on 5007 so follow_me.py / pilot.py
+  python -m archive.fake_esp32              protocol test: prints motor outputs, fake telemetry
+  python -m archive.fake_esp32 --sim        + publishes world state on 5007 so follow_me.py / pilot.py
                                                    can be run with no hardware
-  python -m laptop.control.fake_esp32 --sim --plot + live top-down plot (matplotlib)
-  python -m laptop.control.fake_esp32 --sim --log [NAME]   + record ground truth and everything published/received (README 1c)
+  python -m archive.fake_esp32 --sim --plot + live top-down plot (matplotlib)
+  python -m archive.fake_esp32 --sim --log [NAME]   + record ground truth and everything published/received (README 1c)
 
 Realism is ON by default: 120 ms vision latency, 2-4 cm noise, person dropouts, 2 % packet loss, gyro bias,
 HVAC gusts, slowly changing lift, mismatched motors, a 2 cm ToF altimeter with dropouts. --ideal turns all of it off;
@@ -13,8 +13,8 @@ HVAC gusts, slowly changing lift, mismatched motors, a 2 cm ToF altimeter with d
 Listens for commands on 5005; telemetry goes back to the last sender on 5006; state to 127.0.0.1:5007.
 """
 import argparse, math, time
-from .protocol import CMD_PORT, STATE_PORT, TELEM_PORT, UdpJson
-from ..sim.world import IDEAL, REAL, World
+from laptop.control.protocol import CMD_PORT, STATE_PORT, TELEM_PORT, UdpJson
+from archive.sim.world import IDEAL, REAL, World
 
 
 def main():
@@ -43,12 +43,12 @@ def main():
     world = World(realism, person=args.person, psi0=args.psi0, wind=tuple(args.wind), seed=args.seed, epoch=time.monotonic())
 
     cmd_in, out = UdpJson(CMD_PORT), UdpJson()
-    from ..positioning.session import open_session
+    from laptop.positioning.session import open_session
     log = open_session(args.log, tag="fake", meta={"realism": "ideal" if args.ideal else "real", "person": args.person,
                                                     "seed": args.seed, "psi0": args.psi0, "wind": list(args.wind)})
     plot = None
     if args.plot:
-        from ..sim.plot import Plot
+        from archive.sim.plot import Plot
         plot = Plot(world)
     sender = None
     t_prev = time.monotonic()

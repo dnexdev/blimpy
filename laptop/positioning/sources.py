@@ -4,7 +4,7 @@
   src = make_source("udp")                                   # live: whatever publishes PROTOCOL s4 on 5007
   src = make_source("udp:5008")                              # another port (e.g. a second vision process)
   src = make_source("replay:data/positioning/<session>", speed=2.0, loop=True)
-  src = make_source("sim", world=World(...))                 # in-process simulator (tools/scenarios.py style)
+  src = make_source("sim", world=World(...))                 # in-process simulator (archive/tools/scenarios.py style)
   with src:
       for msg in src.poll():                                 # every PROTOCOL s4 message since the last poll, oldest first
           ...
@@ -124,7 +124,7 @@ class ReplaySource(PositioningSource):
 
 
 class SimSource(PositioningSource):
-    """In-process laptop/sim/world.py World: poll() = world.poll_state(). The caller advances the world."""
+    """In-process archive/sim/world.py World: poll() = world.poll_state(). The caller advances the world."""
     name = "sim"
 
     def __init__(self, world):

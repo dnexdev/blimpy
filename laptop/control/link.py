@@ -6,7 +6,7 @@
   for m, _ in tel_in.recv_all(only_from=esp): warn = wd.telem(m, now, armed)   # EVERY frame, not recv_latest
   reason = wd.check(armed, now)             # once per loop tick; disarm when it returns a string
 
-Pass `now` from any monotonic clock: time.monotonic() in follow_me / pilot, sim seconds in tools/scenarios.py.
+Pass `now` from any monotonic clock: time.monotonic() in follow_me / pilot, sim seconds in archive/tools/scenarios.py.
 Why every frame: after a WiFi hiccup > 500 ms the board trips its failsafe and reports armed:0 / age >= 500 in ONE
 frame, then re-arms on the next command 50 ms later. recv_latest would drop that frame. Why N > 3 for the consecutive
 armed:0 rule: right after arming the board reports armed:0 for 1-3 frames until the first arm:1 reaches it.

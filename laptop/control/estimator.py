@@ -28,7 +28,7 @@ from collections import deque
 from .. import config
 from .protocol import wrap
 
-# Physical constants: config.PHYS is the single source (laptop/sim/world.py::Balloon reads the same numbers).
+# Physical constants: config.PHYS is the single source (archive/sim/world.py::Balloon reads the same numbers).
 # Rough is fine here, they only shape the prediction. M_EFF / K_DRAG follow from D exactly as in Balloon.__init__.
 _V = math.pi / 6 * config.PHYS["D"] ** 3
 M_EFF = 0.05 + config.PHYS["M_GONDOLA"] + (0.166 + 0.5 * 1.2) * _V   # kg, skin + gondola + helium + added mass (~0.83)
@@ -279,7 +279,10 @@ class StateEstimator:
         if self._S < self.s_min or abs(self._z) < self.z_thresh or abs(self._z) < 0.3 * self._A2                 or abs(self._C2) < 0.75 * self._A2:
             return
         d = cmath.phase(self._z)
-        clean = min(1.0, abs(self._z) / (0.55 * self._A2))    # 1 = the velocity really changed as pushed (not cruising)
+        # 1 = the velocity really changed as pushed (not cruising). The direction of a response is right even when its size
+        # is not: with the motors sharing one supply (a third of the thrust gone when several run) and the commands low-passed,
+        # a push answers with 40-60 % of the ideal, and at 0.55 here every twitch only half-corrected the heading (2026-09-20)
+        clean = min(1.0, abs(self._z) / (0.35 * self._A2))
         w = 1.0 if self._v0 < 0.35 else 0.3                   # lessons taken while cruising: less weight (wind bias)
         if self._push_conv:
             w *= 0.15                                         # this push already converged: only track slowly, don't
@@ -323,6 +326,14 @@ class StateEstimator:
         sxx = sum((t - mt) ** 2 for t, _ in self._anchors)
         sxy = sum((t - mt) * (o - mo) for t, o in self._anchors)
         slope = sxy / sxx if sxx > 0 else 0.0
+        # Each anchor is a lesson, a few degrees noisy: three or four of them over a minute give a slope no better than
+        # ~0.002 rad/s, the size of a real gyro bias, and a fit of the wrong sign then walks the heading 15 deg between
+        # twitches (seen 2026-09-20). Trust the slope only when it stands out from its own standard error; a real drift
+        # (the 4x stress test) does at once, noise never does, and an untrusted fit leaves bias_hat where it was.
+        res2 = sum((o - mo - slope * (t - mt)) ** 2 for t, o in self._anchors)
+        se = math.sqrt(res2 / (n - 2) / sxx) if n > 2 and sxx > 0 else float("inf")
+        if abs(slope) < 2.0 * se and abs(-slope - self.bias_hat) < 0.004:
+            return                                              # not distinguishable from the noise: keep what we have
         self.bias_hat = max(-0.015, min(0.015, self.bias_hat + gain * (-slope - self.bias_hat)))
         self.bias_ok = len(self._anchors) >= 3 and span >= 45.0
 

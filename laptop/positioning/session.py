@@ -1,7 +1,7 @@
 """Record and load positioning sessions: data/positioning/<YYYYmmdd_HHMMSS>_<tag>[_NAME]/{session.json, log.jsonl}.
 
   python -m laptop.control.follow_me --log [NAME]           # the controller records what it consumed + what it sent
-  python -m laptop.control.fake_esp32 --sim --log [NAME]    # the sim records ground truth + what it published / received
+  python -m archive.fake_esp32 --sim --log [NAME]    # the sim records ground truth + what it published / received
   python -m laptop.positioning.session data/positioning/<session>     # summary: rows per kind, duration, rates
 
   from laptop.positioning.session import load

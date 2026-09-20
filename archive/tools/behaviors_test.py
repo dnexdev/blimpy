@@ -1,12 +1,12 @@
 """Headless test of the behavior state machine against the simulator (no voice, no keyboard).
 
-  python tools/behaviors_test.py
+  python archive/tools/behaviors_test.py
 
 Feeds a scripted sequence of intents and checks the balloon does what each one means:
 nudge -> follow -> rotate 90 -> timer fires -> go_to home -> dance -> hover.
 """
 import math, os, pathlib, subprocess, sys, time
-ROOT = pathlib.Path(__file__).resolve().parents[1]
+ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT)); os.chdir(ROOT)
 from laptop import config
 from laptop.control.protocol import CMD_PORT, STATE_PORT, TELEM_PORT, UdpJson, make_cmd, now_ms, wrap
@@ -16,7 +16,7 @@ from laptop.control.behaviors import Behaviors
 G = config.FOLLOW
 LOCAL = ("127.0.0.1", CMD_PORT)
 spoken = []
-proc = subprocess.Popen([sys.executable, "-m", "laptop.control.fake_esp32", "--sim", "--person", "static", "--psi0", "1.0"],
+proc = subprocess.Popen([sys.executable, "-m", "archive.fake_esp32", "--sim", "--person", "static", "--psi0", "1.0"],
                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 time.sleep(1.0)
 state_in, tel_in, cmd_out = UdpJson(STATE_PORT), UdpJson(TELEM_PORT), UdpJson()

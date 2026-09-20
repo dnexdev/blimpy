@@ -1,27 +1,29 @@
 # Blimpy
 
-A near-silent helium-balloon robot that follows you around. The gondola is a Bluetooth motor box (the hardware team's
-firmware: per-motor percentages in, IMU lines out); everything clever (mixer, failsafe, vision, control, voice) runs
-on the laptop. `laptop/control/ble_gondola.py` is the bridge to the gondola; everything above it speaks
-[PROTOCOL.md](PROTOCOL.md). **Read that first.**
+A near-silent helium-balloon robot that follows you around. The gondola is a Bluetooth motor box (two ESP32-C3, the
+hardware team's firmware): since 2026-09-20 it runs the fast part itself — the laptop sends setpoints ten times a
+second, the box closes the yaw loop on its own gyro at 50 Hz, slews, and stops on its own 500 ms after the last one.
+Everything else (vision, estimation, behaviours, voice, failsafe) runs on the laptop. `laptop/control/ble_gondola.py`
+is the bridge to the gondola; everything above it speaks [PROTOCOL.md](PROTOCOL.md). **Read that first.**
 
 ```
-firmware/            the hardware team's gondola firmware: esp32_master.ino (Bluetooth LE "BalloonRobot", IMU, motors) + esp32_slave.ino
-                     (second ESP32 over I2C) + reference_control.py (minimal BLE client). See firmware/README.md.
-laptop/config.py     one place for sources, IPs, gains, vehicle physics (PHYS); room geometry is loaded from venues/default.json
-laptop/control/      ble_gondola.py (Bluetooth bridge to the gondola: mixer + failsafe + telemetry) · imu_store.py (IMU samples for everyone, http :5008)
-                     protocol.py (shared mixer) · fake_esp32.py (stand-in + simulator) · teleop.py · follow_me.py · pilot.py · behaviors.py · estimator.py · link.py (telemetry watchdog)
-laptop/vision/       streams.py · calib_io.py · triangulate.py · detect.py (YOLO) · localize.py · mono.py (1 cam) · preflight.py · train_balloon.py
+firmware/            the gondola firmware: esp32_master.ino (Bluetooth LE "BalloonRobot", IMU, the onboard mixer, motors E/F) + esp32_slave.ino
+                     (second ESP32 over I2C, motors C/D) + reference_control.py (minimal BLE client). See firmware/README.md.
+laptop/config.py     one place for sources, IPs, gains, vehicle physics (PHYS), the motor map (from calib/motor_map.json); room geometry from venues/default.json
+laptop/control/      ble_gondola.py (Bluetooth bridge: MAP + CMD setpoints to the box, telemetry back, failsafe) · imu_store.py (telemetry samples for everyone, http :5008)
+                     protocol.py (the mixer's twin, for an older firmware) · teleop.py · follow_me.py · pilot.py · behaviors.py · estimator.py · link.py (telemetry watchdog)
+laptop/vision/       streams.py · calib_io.py · triangulate.py · detect.py (YOLO) · localize.py · mono.py (1 cam) · people.py · eyes.py · preflight.py · train_balloon.py
 laptop/positioning/  schema.py · session.py (record/load) · evaluate.py · sources.py (udp/replay/sim) · fuse.py (stub) · venue.py · record.py · replay.py · capture_place.py
-laptop/sim/          world.py (balloon physics + every sensor model) · plot.py (live top-down view)
 laptop/voice/        stt.py (whisper) · intent.py (local LLM -> JSON intents) · tts.py · omni.py (Qwen3.5-Omni realtime: ears/eyes/mouth, OMNI Live track) · omni_watch.py (focus watcher) · usage_log.py
                      addressee.py (who is that for: cues + room + judge) · session_rec.py (keeps each session) · voiceprint.py (speaker-embedding measurement)
 tools/calib/         make_targets.py · intrinsics.py · extrinsics.py · triangulate_test.py · record_clips.py
 tools/dataset/       build_balloon_dataset.py · label_site.py · extract_frames.py
-tools/               scenarios.py · sim_test.py (--ble) · ble_test.py · behaviors_test.py · control_test.py · vision_test.py · positioning_test.py · intent_test.py
+tools/               motor_map.py (which letter is which motor) · bridge_test.py · control_test.py · vision_test.py · people_test.py · scene_test.py · positioning_test.py · intent_test.py
                      omni_test.py (offline) · omni_live_test.py · addressee_backtest.py (replay recorded sessions, no key) · omni_report.py (sponsor usage report)
                      webcam_test.py · balloon_eval.py · vision_check.py (go/no-go) · positioning_eval.py (sessions vs truth)
-calib/               <name>_intrinsics.npz (once) and <name>_extrinsics.npz (every placement)
+archive/             the simulator, frozen 2026-09-20 when the real balloon took over: sim/world.py, fake_esp32.py, archive/tools/scenarios.py and the
+                     other sim-based suites, archive/tools/rehearse.py. Still runs (archive/README.md); not maintained
+calib/               <name>_intrinsics.npz (once) and <name>_extrinsics.npz (every placement) · motor_map.json (tools/motor_map.py) · MEASUREMENTS.md
 venues/              default.json: the room (arena, obstacles, places). Committed; config.py exports it as ARENA / OBSTACLES / JUDGES_XY
 docs/                BUILD_STEPS.md: build it, one step at a time (36 steps in three phases: H = the hardware team's motor box, S = everything the software people do meanwhile with no motors, J = the join and first flight) · ROBOT_BUILD.md: the design behind
                      the steps (what the code assumes: balloon, gondola, motors, hang, room) · build_blueprint.html / build_steps.html: the same two with drawings and checkboxes
@@ -40,61 +42,34 @@ PowerShell window is the right interpreter there. Make the venv on any other mac
 
 Gondola link (Bluetooth LE): the gondola advertises as `BalloonRobot`. Windows Bluetooth on, then:
 ```powershell
+python -m laptop.control.ble_gondola --probe   # 10 s of telemetry + a verdict: "OK, onboard mixer" is the firmware you want
 python -m laptop.control.ble_gondola      # scan, connect, bridge udp 5005/5006 <-> BLE. Leave it running (Ctrl+C = STOP)
 python -m laptop.control.teleop           # second terminal: SPACE arm, w/s a/d q/e j/l, k = kill. pilot / follow_me the same way
 ```
-For a minimal reference to control the master ESP32, run
-`python firmware/reference_control.py`. See the
-[firmware README](firmware/README.md#python-ble-control-reference)
-for commands and how to use this reference in the main control code.
+The bridge prints the motor map it sends to the box (`MAP LF- RD- SE+ VC+ G+`, from `calib/motor_map.json`, measured
+2026-09-20) and refuses nothing, but WARNS when the map is the untested placeholder: `python tools/motor_map.py` measures
+it (section 3). For a minimal reference client, `python firmware/reference_control.py`; the box's commands are in
+[firmware/README.md](firmware/README.md#flight-commands-onboard-mixer-2026-09-20).
 
-`http://127.0.0.1:5008/imu` (latest IMU sample), `/imu/history?n=200`, `/status` while the bridge runs; the same data in
-Python via `laptop.control.imu_store`. Motor letters, signs and the IMU layout are set once on the bench (section 3).
-(The legacy WiFi firmware, a PlatformIO build with the mixer on the board, left the repo on 2026-09-19 when the hardware
-team's master / slave sketches replaced it; it is in git history before `de42b4c`. `--esp` still says where commands go.)
+`http://127.0.0.1:5008/imu` (latest telemetry sample), `/imu/history?n=200`, `/status` (firmware generation, the box's
+state, the map) while the bridge runs; the same data in Python via `laptop.control.imu_store`. (The legacy WiFi firmware
+left the repo on 2026-09-19, git history before `de42b4c`; `--esp` still says where commands go.)
 
 **Network rule:** phones and Pis join the *laptop's hotspot*, never the hackathon WiFi. The gondola is on Bluetooth.
 
-## 1. Track B — protocol works with no hardware (5 minutes)
+## 1. The control stack, and the tests that need no hardware
 
-Terminal 1 and 2 (from the repo root):
+Offline checks (seconds, no robot, no camera), run after touching `laptop/control`:
 ```powershell
-python -m laptop.control.fake_esp32
-python -m laptop.control.teleop
+python tools/bridge_test.py      # the BLE bridge against a stub box: telemetry parsing, MAP / CMD text, the motor-map file, arming rules, box silent -> STOP, older firmware -> MOTORS
+python tools/control_test.py     # mixer twin of the firmware (yaw-rate integrator, the total-duty budget), ToF altitude path, telemetry watchdog
+python archive/tools/scenarios.py [--seeds 5]   # the archived simulator's 26 closed-loop scenarios, ~3 s: still the best regression for the gains
 ```
-Press SPACE to arm, `w` a few times, watch the fake motors ramp; kill teleop with Ctrl+C and watch the
-fake disarm within 0.5 s. That is the failsafe working.
+The simulator itself (balloon physics, every sensor model, the real-time stand-in board, the rehearsal with a virtual
+balloon) moved to [archive/](archive/README.md) on 2026-09-20 when the real balloon took over; what it modelled and
+what it taught is written up there.
 
-The same thing through the Bluetooth bridge on its simulated robot: `python -m laptop.control.ble_gondola --fake --sim`
-instead of `fake_esp32` (teleop / follow_me / pilot do not know the difference). `python tools/ble_test.py` (12 s, no
-hardware) checks the bridge itself: udp command -> mixer -> `MOTORS` percentages, IMU lines -> telemetry, the 500 ms
-STOP, the IMU store and its HTTP endpoints, recovery after a link drop. `python tools/sim_test.py --ble` is the control
-regression over the bridge.
-
-Regression test of the whole control stack (failsafe timing + follow-me vs a walking person, ~50 s, no hardware):
-```powershell
-python tools/sim_test.py
-```
-
-### What the simulator models (and what it taught us)
-`laptop/sim/world.py` is force-based, built from the parts list (constants at the top of `class Balloon`), and
-`fake_esp32.py --sim` runs it in real time behind the real UDP protocol. **Realism is on by default** (`REAL`):
-120 ms vision latency, 2-4 cm position noise, person dropouts and false detections, 2 % packet loss, gyro bias
-after boot calibration, HVAC gusts, lift drifting with room temperature, mismatched motors, the sideways motor
-a few cm off-centre, walls and obstacles (`venues/default.json`, exported by `laptop/config.py` as ARENA / OBSTACLES). `--ideal` turns all of it off.
-- **Effective mass ~0.83 kg**, not 0.3: a sphere drags half its displaced air along ("added mass").
-- **Thrust ~ duty²**: 8520 + 75 mm prop ~50 gf flat out, ~12 gf at the 0.5 cap; motors below ~6 % duty do nothing;
-  a fixed prop in **reverse gives ~60 %**. Two motors -> top speed ~0.95 m/s, but 0 to 0.3 m/s takes ~3 s.
-- **Quadratic drag**: from 0.3 m/s with motors off it still coasts >2 m in 10 s. Drag does NOT stop it; thrust does.
-- **No keel**: heading and velocity are independent. That is why there are **four motors, all reversible**:
-  L + R (rear, forward axis: drive, brake, yaw), **S sideways through the centre**, **V vertical** (lift changes by
-  grams as the room warms; ballast alone hits the ceiling within a minute). See PROTOCOL.md section 6.
-- **Gondola tilt**: horizontal thrust swings the gondola ~4 deg, adding ~1 gf of lift at full push.
-- **Yaw**: 25 cm motor spacing, ~0.025 kg m² inertia, ~no damping -> mixer yaw-rate PI loop (P 1.0, I 1.0/s).
-The vehicle numbers (`D`, `T_MAX`, `REV_EFF`, `ARM_BELOW`, `TOF_BELOW`, `M_GONDOLA`, `MOTOR_SPACING`) live in `laptop/config.py` PHYS,
-shared by the simulator and the estimator; measure them on the bench (section 3b) and rerun the tests.
-
-### How the control stack copes with all that (laptop/control)
+### How the control stack copes with the real world (laptop/control)
 - **Estimator** (`estimator.py`): alpha-beta filter whose prediction uses the commanded thrust, so it is smooth
   without lagging our own moves. **Heading** = gyro yaw + an offset learned from how the balloon *responds* to a
   push (commanded thrust direction vs. measured velocity change), so it works from any manoeuvre and is immune to
@@ -105,42 +80,26 @@ shared by the simulator and the estimator; measure them on the bench (section 3b
   measured velocity gets small. A **twitch** (2 s, 0.35 m/s) re-teaches the heading every ~40 s of quiet.
 - **Controller** (`follow_me.py`): holonomic velocity tracking with vector saturation (braking keeps its direction),
   reverse thrust compensated, approach speed limited by a braking parabola, the person's walking velocity fed
-  forward, a sideways dodge when someone walks straight at it, walls/obstacles avoided by capping the closing speed
-  (judged 1.2 s ahead) and sliding around with a committed side; hover is a **position** hold; height is P+I+D
-  with the integrator learning the ballast trim.
+  forward, a sideways dodge when someone walks straight at it (side committed until it is over), walls/obstacles
+  avoided by capping the closing speed (judged 1.2 s ahead) and sliding around with a committed side; hover is a
+  **position** hold; height is P+I+D with the integrator learning the ballast trim.
+- **Smooth commands** (2026-09-20, after a live log showed vf/vs slamming between +0.4 and -0.4 every frame): the
+  velocity estimate is ~3 cm/s noisy, so errors under `V_DEAD` ask for nothing, the thrust linearisation is a straight
+  line near zero instead of a sqrt, every threshold in the law is a ramp, and the forward / sideways commands go
+  through a 0.2 s low-pass before the motor-start cut. Command chatter in the scenarios went from 0.15-0.27 to
+  0.02-0.06 of duty per tick with no loss of tracking.
+- **Shared motor supply**: switching on more motors slows the others, so the mixer caps the four duties together at
+  1.2 (`TOTAL_CAP`), the braking assumptions are de-rated (`A_BRAKE`, `A_WALL`) and the yaw loop is closed on the
+  gyro ON THE BOX, where it takes up the slack within a few ticks.
 - **Behaviours**: follow, hover, go-to (with detours when wedged and "as close as I can get"), wander, rotate
   (bias-compensated, PI-rate), dance, timers, pomodoro, focus guard, altitude offsets.
-
-### Scenario suite (run this after touching anything in laptop/control or the gains)
-```powershell
-python tools/scenarios.py                 # 20 scenarios, ~3 s, headless, 100x real time, scored against truth
-python tools/scenarios.py --seeds 5       # repeat with 5 random seeds, worst case shown
-python tools/scenarios.py --plot go_to    # sim_out/<name>.png: trajectory, height, heading error, distance
-python tools/scenarios.py --tof           # ToF altimeter on in every scenario (see the note below)
-```
-Scenarios: failsafe, follow (ideal / real noise / walking / demo route with a pillar), hover in gusts, rotate
-90/-180/360, go to the judges and home past a pillar, come here, altitude commands, lift drift, wrong initial
-heading, 4x gyro drift, long hover then follow, wander, lossy links, dance, ToF with bad vision z, no ToF, board-side
-failsafe (WiFi hiccup). All pass across seeds 0-4. Known fragility: `go_to` / `wrong_initial_heading` / `follow_route` are
-seed-marginal (main fails some of seeds 5-9, and `--tof` flips `go_to` seed 0 into a failed detour because the V motor's tilt
-term leaks a little thrust into xy). The scenario suite therefore keeps the ToF OFF except in the ToF scenarios, so seeded
-runs stay bit-identical; `fake_esp32 --sim` has it ON (the real gondola does). Height with the ToF: 2 cm rms vs 15 cm
-with 25 cm vision noise, and the V motor stops thrashing.
 
 Offline vision regression (synthetic two-camera rig, AprilTag pose round-trip, localize tick with fake detectors;
 no cameras, no YOLO, ~2 s). Run it after touching `laptop/vision/*` or `tools/calib/*`:
 ```powershell
 python tools/vision_test.py
-python tools/control_test.py     # mixer twin of the firmware test (yaw-rate integrator), ToF altitude path, telemetry watchdog (~1 s)
+python tools/people_test.py; python tools/scene_test.py
 ```
-
-### Tune follow-me in the simulator
-```powershell
-python -m laptop.control.fake_esp32 --sim --plot          # add --person route | static | random, --ideal, --gusts 0.1
-python -m laptop.control.follow_me
-```
-SPACE arms. The balloon learns its heading with a few short pushes (gyro yaw starts at an unknown offset),
-then turns to face the walking person and holds ~1.5 m from them. Edit gains in `laptop/config.py` FOLLOW.
 
 ## 1b. Voice + behaviors (laptop only)
 
@@ -154,9 +113,9 @@ or it silently runs on the CPU (`ollama ps` must show 100% GPU). `python tools/i
 scores 35 phrases: 7b = 35/35 at 0.8 s median on the 5080, 3b = 31/35 at 0.5 s (use `BLIMPY_LLM=qwen2.5:3b` on CPU).
 Whisper runs `large-v3-turbo` on the GPU (0.3 s per sentence) and falls back to `base.en` on CPU. Then:
 ```powershell
-python -m laptop.control.fake_esp32 --sim --plot
+python -m laptop.control.ble_gondola      # (or, without the robot:  python -m archive.fake_esp32 --sim --plot)
 python -m laptop.control.pilot            # SPACE arm, v = push-to-talk, t = type a command
-python tools/behaviors_test.py            # headless regression of the state machine
+python archive/tools/behaviors_test.py    # headless regression of the state machine (archived simulator)
 ```
 Places (judges spot, obstacles, optional wander box) are in `venues/default.json`; measure them once the cameras are
 calibrated: `python -m laptop.positioning.capture_place judges --xy X Y` (tape measure) or `--from person` (vision). See 1c.
@@ -265,10 +224,10 @@ OMNI story. Why not two on the balloon: weight. **No room camera at all?** `pilo
 FOLLOW, ROTATE and HOVER-still; GO_TO and WANDER are refused ("I can't see the room from up here"). Nothing senses walls
 in that mode: the person leads, keep 1 m off the walls.
 
-Offline, all of it runs against the simulated eye (`laptop/sim/world.py`, `fpv=True`):
+Offline, all of it runs against the simulated eye (`archive/sim/world.py`, `fpv=True`; archived 2026-09-20):
 ```powershell
-python tools/fpv_test.py                       # geometry, sim eye vs truth, relative mode, sign of the follow law (19 checks)
-python tools/scenarios.py eye                  # eye + room camera walk; eye-only static / walk / rotate (no room camera)
+python archive/tools/fpv_test.py               # geometry, sim eye vs truth, relative mode, sign of the follow law (20 checks)
+python archive/tools/scenarios.py eye          # eye + room camera walk; eye-only static / walk / rotate (no room camera)
 python -m laptop.control.ble_gondola --fake --sim      # the simulated robot has the eye (--no-fpv); --tof adds an ultrasonic (the real box has none)
 python -m laptop.control.pilot --no-voice              # FOLLOW uses the eye for yaw; add --relative to pretend there is no room camera
 ```
@@ -302,7 +261,7 @@ visible for the speaker; and no command could name another person.
   flagged (`amb`) and the name on that label is dropped: a wrong name is worse than none. Position quality is explicit:
   `feet` exact | `approx` | `head` (feet out of the picture) | none (someone right at the laptop: listed, no metres).
 - **One camera owner**: mono serves its picture and that frame's people on `127.0.0.1:5019`; `pilot --omni-cam room`
-  (automatic in `tools/rehearse.py --person real`) makes that Blimpy's eyes. Also the way to have eyes at all on Windows
+  (automatic in `archive/tools/rehearse.py --person real`) makes that Blimpy's eyes. Also the way to have eyes at all on Windows
   while mono runs (one process per webcam). Plain `pilot` still opens camera 0 itself.
 - **Marks**: the pilot draws, on the picture the model gets, each person's box + label (+ name), the balloon as
   `BLIMPY (you)` with its nose, the mat's axes, and a strip with measured facts:
@@ -337,17 +296,17 @@ tested on a MacBook; if the pilot prints its BLIND warning on Windows, `--omni-c
 uses mono's position message, not the picture). A machine whose webcam has no checkerboard calibration sets
 `BLIMPY_CALIB_A=<name>` and `BLIMPY_DEVICE` in `.env` (see `.env.example`); the demo laptop needs neither.
 
-## 1f. Rehearse the whole demo without the robot
+## 1f. Rehearse the whole demo without the robot (archived, still runs)
 
 The simulated gondola (eye + ultrasonic, walking person, live plot) behind the BLE bridge, the real pilot, the real
 cloud voice. One command in a NEW PowerShell window (the key is in the environment):
 ```powershell
-python tools/rehearse.py                 # SPACE arms. Then talk: "Blimpy, follow me", "turn left", "stop", "set a timer for one minute", "what do you see"
-python tools/rehearse.py --person real   # YOU are the person: laptop webcam + mat board track you (section 3a), the balloon is virtual
-                                         # -> walk the room and watch it follow on the plot. Also the fallback demo if the hardware dies.
-python tools/rehearse.py --relative      # pretend there is no room camera (eye + ultrasonic only)
-python tools/rehearse.py -- --voice local    # offline voice (whisper + ollama, v = push-to-talk)
-python tools/omni_sim_test.py [--relative]   # the same chain, automated with spoken wav commands: 12 checks, ~2 min, ~8 cloud calls
+python archive/tools/rehearse.py                 # SPACE arms. Then talk: "Blimpy, follow me", "turn left", "stop", "set a timer for one minute", "what do you see"
+python archive/tools/rehearse.py --person real   # YOU are the person: laptop webcam + mat board track you (section 3a), the balloon is virtual
+                                                 # -> walk the room and watch it follow on the plot. Also the fallback demo if the hardware dies.
+python archive/tools/rehearse.py --relative      # pretend there is no room camera (eye + ultrasonic only)
+python archive/tools/rehearse.py -- --voice local    # offline voice (whisper + ollama, v = push-to-talk)
+python archive/tools/omni_sim_test.py [--relative]   # the same chain, automated with spoken wav commands: 12 checks, ~2 min, ~8 cloud calls
 ```
 What to watch: the plot (blue balloon turns toward the red person and settles 1.5 m away), the pilot line
 (`FOLLOW eye+room d=1.52` or `FOLLOW eye b=+3 r=1.48`), and the transcript. In the sim Blimpy's conversational eyes are
@@ -440,7 +399,7 @@ for whatever comes next), a **fusion stub** (newest-by-priority, TODO the maths)
 Row format and clock conventions: `laptop/positioning/schema.py`.
 
 ```powershell
-python -m laptop.control.fake_esp32 --sim --log demo      # records ground TRUTH + what it published / received
+python -m archive.fake_esp32 --sim --log demo             # (archived simulator) records ground TRUTH + what it published / received
 python -m laptop.control.follow_me --log demo             # records what the controller consumed + the commands it sent (pilot: same flag)
 python -m laptop.positioning.session data/positioning/<session>            # rows per kind, duration, rates
 python -m laptop.positioning.replay data/positioning/<session> --speed 3   # re-emit on 5007; run follow_me against it, no sim / ESP32 needed
@@ -544,22 +503,32 @@ you should see and what to do if not. [docs/ROBOT_BUILD.md](docs/ROBOT_BUILD.md)
 is the design behind it (balloon size, motor layout, IMU orientation, the clip, weight budget); `docs/build_blueprint.html` and
 `docs/build_steps.html` are the same two with drawings and checkboxes.
 
-1. Bluetooth on, gondola powered. `python -m laptop.control.ble_gondola --probe`: it must connect to `BalloonRobot` and
-   print IMU lines with the parsed dict next to each. Set `config.BLE` `IMU_FIELDS` / `GYRO_UNITS` until the dict shows
-   `gz_rad` (and `yaw_rad` if the firmware sends a heading). Rotate the gondola CCW by hand: `gz_rad` must be positive
-   (set `GYRO_SIGN = -1` if not). No ToF on this build: telemetry `alt` is -1 and height comes from vision.
-2. Which letter is which: `python -m laptop.control.ble_gondola --motor C 30` runs one motor at 30 % for 2 s. Repeat for
-   D, E, F and fill `config.BLE` `MOTORS` (L and R at the rear pushing forward, S pushing left, V pushing up) and `SIGN`
-   (-1 where a positive percent pushes the wrong way).
-3. `python -m laptop.control.ble_gondola` in one terminal, `python -m laptop.control.teleop` in another. SPACE arms;
-   `w` -> L and R forward, `s` -> reverse, `j` -> S pushes left, `q` -> V pushes up, `a` -> L back / R forward and
-   telemetry `yaw` rises. Props balanced, foam tape under motors, throttle stays <= 50 % by construction.
-4. Failsafe: Ctrl+C teleop -> the bridge sends `STOP` within 0.5 s and every motor stops. Then kill the BRIDGE while the
-   motors run: if they keep spinning, the firmware has no command timeout yet. Ask the hardware team for one (STOP after
-   500 ms without a command); until then keep the gondola tethered and a `STOP` ready.
-5. (The legacy WiFi board's firmware is no longer in the repo: git history before `de42b4c`. PROTOCOL.md section 9 keeps
-   its pin table for reference.)
-6. Only now attach to the balloon. Trim ballast ~1 gf HEAVY (sinks very slowly with motors off; see PROTOCOL.md section 6).
+The box runs `firmware/esp32_master.ino` + `esp32_slave.ino` (the hardware team flashes them; the commands are in
+[firmware/README.md](firmware/README.md#flight-commands-onboard-mixer-2026-09-20)). Since 2026-09-20 the box mixes: the
+laptop sends setpoints, the box closes the yaw loop on its own gyro and stops by itself 500 ms after the last command.
+
+1. Bluetooth on, box powered, **held still for 5 s** (it zeroes its gyro). `python -m laptop.control.ble_gondola --probe`:
+   it must connect to `BalloonRobot`, print telemetry lines with the parsed dict next to each, and end with
+   `OK, onboard mixer` (5 lines a second is by design; `TOO SLOW` / no `st` in the line = an older firmware is on the
+   box, flash the one in `firmware/`). Rotate the box CCW by hand: `gzc` and `yaw` must increase (else `G-` in the map).
+   No ultrasonic on this box: telemetry `alt` is -1, height comes from the room camera.
+2. Which letter is which motor, which way: `python tools/motor_map.py` (props on, box tied down, one person on the
+   switch). It spins C, D, E, F in turn, asks which motor turned and where the air went, writes `calib/motor_map.json`
+   and sends the map to the box. Then `python tools/motor_map.py --check`: L, R, S, V "forward" one by one through the
+   map, then both rear motors together. Done by hand 2026-09-20: `L=F- R=D- S=E+ V=C+` (calib/MEASUREMENTS.md); run
+   the wizard again after ANY rewiring.
+3. `python -m laptop.control.ble_gondola` in one terminal (it prints the map it sends; `box st1` in its status line once
+   armed), `python -m laptop.control.teleop` in another. SPACE arms; `w` -> both rear props blow BACKWARD (the balloon
+   would go forward), `s` -> the other way, `j` -> S pushes left, `q` -> V pushes up, `a` -> the box turns CCW and
+   telemetry `yaw` rises. Throttle stays <= 50 % per motor and 120 % for all four together by construction (they share
+   one supply: more motors on = each one slower).
+4. Failsafe, three ways, with the motors running: Ctrl+C teleop -> STOP within 0.5 s. Kill the BRIDGE -> the box stops
+   itself within 0.5 s (no CMD). Pull the I2C wire between the two boards -> C and D stop within 0.6 s. Any of the three
+   failing = do not fly.
+5. Lowest starting percent per motor: `python tools/motor_map.py --check --pct 15`, then 20, 25: note the lowest at
+   which each prop turns in calib/MEASUREMENTS.md; `config.FOLLOW DUTY_MIN` (0.1 = 10 %) must be at or above it.
+6. Only now attach to the balloon (docs/BUILD_STEPS.md Phase J). Trim ballast ~1 gf HEAVY (sinks very slowly with motors
+   off; see PROTOCOL.md section 6). First flight is a hover with the tether on, then "follow me".
 
 ## 3b. Bench measurements -> `laptop/config.py` PHYS
 
@@ -593,8 +562,9 @@ Later, with the balloon inflated:
 - Confirm: Pi models (Ethernet?), Camera Module 3 variant (standard vs Wide — the two must match), soldering iron access.
 
 ## Milestones
-- [x] M0a fake_esp32 + teleop round-trip; Bluetooth bridge + simulated robot pass ble_test / sim_test --ble
-- [ ] M0b bridge connected to the gondola; motor letters and signs verified; IMU sign; STOP within 0.5 s (section 3)
+- [x] M0a fake_esp32 + teleop round-trip; Bluetooth bridge + simulated robot pass ble_test / sim_test --ble (simulator archived 2026-09-20)
+- [ ] M0b bridge connected to the gondola (done 2026-09-19); motor letters and signs measured 2026-09-20 (calib/motor_map.json), to be
+      confirmed with `motor_map.py --check` on the new firmware; IMU sign done; STOP within 0.5 s three ways (section 3 step 4)
 - [ ] M0c PHYS measured (section 3b)
 - [ ] M1 both camera streams in, focus/exposure locked, skew < 100 ms
 - [ ] M2 intrinsics + floor-tag extrinsics; tag corners within 1 cm; tape-measure test passes

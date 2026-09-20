@@ -1,6 +1,6 @@
 """Live top-down view of the simulated world (matplotlib, persistent artists so it stays cheap)."""
 import math
-from .. import config
+from laptop import config
 
 
 class Plot:

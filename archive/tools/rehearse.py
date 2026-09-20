@@ -1,18 +1,18 @@
 """Rehearse the whole demo WITHOUT the robot: the simulated gondola (eye on the balloon + ultrasonic, live top-down plot)
 behind the BLE bridge, and the real pilot with the real voice (OMNI when YIBU_API_KEY is set, else local). One command:
 
-  python tools/rehearse.py                     # then talk: "Blimpy, follow me" / "turn left" / "stop" / "set a timer for one minute"
-  python tools/rehearse.py --relative          # pretend there is no room camera: eye + ultrasonic only
-  python tools/rehearse.py --person static     # sim person stands still (default walks around)
-  python tools/rehearse.py --person real       # YOU are the person: the laptop webcam + mat board track you (mono.py, started
+  python archive/tools/rehearse.py                     # then talk: "Blimpy, follow me" / "turn left" / "stop" / "set a timer for one minute"
+  python archive/tools/rehearse.py --relative          # pretend there is no room camera: eye + ultrasonic only
+  python archive/tools/rehearse.py --person static     # sim person stands still (default walks around)
+  python archive/tools/rehearse.py --person real       # YOU are the person: the laptop webcam + mat board track you (mono.py, started
                                                # here too), the balloon is virtual: walk the room, watch it follow on the plot
-  python tools/rehearse.py -- --voice local    # everything after "--" goes to the pilot (python -m laptop.control.pilot -h)
+  python archive/tools/rehearse.py -- --voice local    # everything after "--" goes to the pilot (python -m laptop.control.pilot -h)
 
 The plot window shows the balloon (blue), its heading, the person (red) and the walls. The pilot prints what it heard,
 the tool call, the mode and the commands. SPACE arms, ESC quits (the pilot); this script then stops the simulator.
 """
 import argparse, os, pathlib, subprocess, sys, time
-ROOT = pathlib.Path(__file__).resolve().parents[1]
+ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT)); os.chdir(ROOT)
 
 

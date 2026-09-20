@@ -106,28 +106,62 @@ ESP32_IP = "127.0.0.1"            # where the control programs send commands. Th
                                   # `python -m laptop.control.ble_gondola` on this laptop and everything talks to it here.
                                   # (Legacy WiFi firmware boards answer on "blimpy-9910.local" / "blimpy-91c8.local".)
 
-# --- Gondola over Bluetooth LE (laptop/control/ble_gondola.py). The firmware takes per-motor PERCENTAGES as text. ---
+# --- Gondola over Bluetooth LE (laptop/control/ble_gondola.py). Two firmware generations, the bridge tells them apart:
+#     2026-09-20 (firmware/esp32_master.ino, "onboard mixer"): the box mixes; the bridge sends `CMD vf vs yr vz` setpoints
+#     10 times a second and `MAP ...` on connect; telemetry every 200 ms with the heading integrated on the box.
+#     Earlier builds: the bridge mixes at 50 Hz and writes `MOTORS c d e f` (needs telemetry at 20 Hz or more). ---
 BLE = dict(
     NAME="BalloonRobot",
     SERVICE_UUID="12345678-1234-1234-1234-123456789000",     # discover by advertised service, even when the device name is missing
-    COMMAND_UUID="12345678-1234-1234-1234-123456789001",     # write: "C 40" | "ALL 30" | "MOTORS c d e f" | "STOP"
-    TELEMETRY_UUID="12345678-1234-1234-1234-123456789002",   # notify: one IMU text line per sample
-    MOTORS={"L": "C", "R": "D", "S": "E", "V": "F"},   # our motor -> firmware letter. VERIFY on the bench: ble_gondola --motor C 30
-    SIGN={"L": 1, "R": 1, "S": 1, "V": 1},              # -1 if a motor pushes the wrong way for a positive percent
+    COMMAND_UUID="12345678-1234-1234-1234-123456789001",     # write: "CMD 20 0 0 0" | "MAP LC+ RD+ SE+ VF+ G+" | "C 40" | "MOTORS c d e f" | "STOP"
+    TELEMETRY_UUID="12345678-1234-1234-1234-123456789002",   # notify: one text line per sample
+    # Which firmware LETTER (C D E F) drives which of OUR motors, and which way. The motors were rewired 2026-09-20, so these
+    # defaults are placeholders: run  python tools/motor_map.py  (spins each letter, you say which motor it was and which way
+    # the air went) -> calib/motor_map.json, which OVERRIDES the two lines below whenever it exists. L/R: rear left/right,
+    # + = pushes the balloon forward (air blows backward). S: + = pushes LEFT. V: + = pushes UP.
+    MOTORS={"L": "C", "R": "D", "S": "E", "V": "F"},
+    SIGN={"L": 1, "R": 1, "S": 1, "V": 1},
     PCT_MAX=100,          # firmware clamp; the mixer's CAP (0.5) keeps normal flight at +-50
-    HZ=20,                # MOTORS lines per second at most (BLE write-without-response)
+    HZ=20,                # old firmware: MOTORS lines per second at most (BLE write-without-response)
+    CMD_HZ=10,            # onboard mixer: CMD setpoint lines per second (the box slews and closes the yaw loop itself)
     IMU_FIELDS=None,      # names for a bare-numbers IMU line, e.g. ("ax","ay","az","gx","gy","gz"); None = by count / key=value
     GYRO_UNITS="deg",     # "deg" (deg/s and degrees, most Arduino IMU libraries) or "rad"
-    GYRO_ZERO=True, GYRO_ZERO_S=3.0, GYRO_STILL_DPS=0.6, GYRO_BIAS_MAX_DPS=5.0,   # gyro zero learnt while disarmed and still (bridge._zero_gyro):
-                          # hold the gondola still ~3 s before arming. Bench 2026-09-19: gz rests at -0.36 deg/s, noise 0.06.
-    GYRO_SIGN=1,          # -1 if turning the gondola counter-clockwise (seen from above) gives a NEGATIVE gz
-    IMU_FRESH_MS=200,     # yaw-rate feedback in the mixer only with a sample younger than this
+    GYRO_ZERO=True, GYRO_ZERO_S=3.0, GYRO_STILL_DPS=0.6, GYRO_BIAS_MAX_DPS=5.0,   # old firmware: gyro zero learnt on the laptop while disarmed
+                          # and still (bridge._zero_gyro). The onboard mixer zeroes its own gyro (telemetry `bias`). Bench 2026-09-19: -0.36 deg/s.
+    GYRO_SIGN=1,          # -1 if turning the gondola counter-clockwise (seen from above) gives a NEGATIVE gz. MEASURED 2026-09-19: +1.
+                          # Sent to the box in the MAP line (G+ / G-); calib/motor_map.json may override it too.
+    IMU_FRESH_MS=450,     # old firmware: yaw-rate feedback in the laptop mixer only with a sample younger than this (200 ms telemetry
+                          # still counts). Onboard mixer: the box is considered gone when its telemetry is older than BOX_SILENT_MS.
+    BOX_SILENT_MS=1500,   # onboard mixer: no telemetry from the box for this long while flying -> setpoints stop, bridge reports armed 0
     ALT_KEYS=("alt", "range", "dist", "sonar", "us"),   # a downward ultrasonic in the same IMU line, first key found wins.
                           # NONE on the 2026-09-19 box (it ran out of pins): the path stays for when one is fitted
     ALT_UNITS="cm",       # "cm" | "mm" | "m" as the firmware prints it; <= 0 = no echo. Telemetry alt is metres, -1 = none
     ALT_FRESH_MS=300,     # older than this -> alt -1 (the estimator then falls back to the room camera for height)
     HTTP_PORT=5008,       # GET http://127.0.0.1:5008/imu | /imu/history?n=200 | /status
 )
+MOTOR_MAP_FILE = "calib/motor_map.json"   # written by tools/motor_map.py; overrides BLE MOTORS / SIGN / GYRO_SIGN when present
+
+
+def _load_motor_map(b):
+    """calib/motor_map.json -> config.BLE MOTORS / SIGN (/ GYRO_SIGN). Measured beats typed."""
+    import json
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), MOTOR_MAP_FILE)
+    try:
+        with open(path, encoding="utf-8") as f:
+            m = json.load(f)
+        b["MOTORS"] = {k: str(v).upper() for k, v in m["MOTORS"].items()}
+        b["SIGN"] = {k: int(v) for k, v in m["SIGN"].items()}
+        if m.get("GYRO_SIGN") in (1, -1): b["GYRO_SIGN"] = int(m["GYRO_SIGN"])
+        b["MAP_SOURCE"] = f"{MOTOR_MAP_FILE} ({m.get('measured', '?')})"
+    except FileNotFoundError:
+        b["MAP_SOURCE"] = "config.py placeholders: NOT MEASURED, run  python tools/motor_map.py"
+    except (KeyError, ValueError, TypeError) as e:
+        b["MAP_SOURCE"] = f"{MOTOR_MAP_FILE} unreadable ({e}); config.py placeholders in use"
+    if sorted(b["MOTORS"].values()) != ["C", "D", "E", "F"] or set(b["MOTORS"]) != {"L", "R", "S", "V"}:
+        raise SystemExit(f"config.BLE MOTORS must map L R S V to C D E F, one each: {b['MOTORS']} ({b['MAP_SOURCE']})")
+
+
+_load_motor_map(BLE)
 
 # --- Calibration targets ---
 CALIB_DIR = "calib"
@@ -149,10 +183,10 @@ BALLOON_COLOR = "white"                 # ... colour-blob detector (white/red/or
 
 # --- The room (world frame, metres from the floor AprilTag). Geometry is DATA: venues/default.json (committed).
 #     PLACEHOLDERS until tape-measured on site, or:  python -m laptop.positioning.capture_place <name> --xy X Y  ---
-# --- Vehicle physics: ONE place. laptop/sim/world.py (Balloon), laptop/control/estimator.py and follow_me.py read it.
+# --- Vehicle physics: ONE place. archive/sim/world.py (Balloon), laptop/control/estimator.py and follow_me.py read it.
 #     Parts-list PLACEHOLDERS until measured on the bench (README section 3b). ---
 PHYS = dict(
-    D=1.00,               # m, envelope diameter. MEASURED 2026-09-19 (build step S4): 100 cm on the dot, 48" latex inflated to the 110 cm wall marks
+    D=1.15,               # m, envelope diameter. MEASURED 2026-09-20 (re-inflated for the flight): 115 cm. (2026-09-19 it was 1.00.)
     T_MAX=0.050 * 9.81,   # N per motor at duty 1.0 (~50 gf). MEASURE: one motor on a kitchen scale at duty 0.3 / 0.4 / 0.5
     REV_EFF=0.6,          # reverse / forward thrust at the same duty (fixed prop + DRV8833 slow decay). MEASURE: same rig, reverse
     ARM_BELOW=0.55,       # m, motor plane below the balloon centre (pendulum arm). MEASURE: tape, balloon hanging
@@ -182,25 +216,39 @@ FOLLOW = dict(
     V_ABS_MAX=0.7,        # m/s cap on the total desired speed (person's speed + closing); ~top speed at the duty cap
     K_V=2.8,              # thrust = K_V * (desired velocity - actual velocity), in thrust fraction per m/s. Drag is quadratic
                           # so the balloon coasts for metres; this term (forward AND sideways) is what stops it.
-    K_Z=1.0,              # vertical gain (natural period of the height loop ~15 s: it is a slow, heavy axis)
+    K_Z=1.3,              # vertical gain (natural period of the height loop ~13 s: it is a slow, heavy axis). 1.0 until 2026-09-20:
+                          # with the shared supply the V motor loses up to a third of its thrust whenever L/R/S run, so a little more gain
     K_VZ=3.0,             # vertical braking gain (more damping than gain: the vertical axis coasts)
-    Z_KI=0.1,             # vertical integrator: learns the ballast trim (thrust fraction per m*s). Keep slow (~T/4)
+    Z_KI=0.15,            # vertical integrator: learns the ballast trim (thrust fraction per m*s). Keep slow (~T/4)
     Z_I_MAX=0.12,         # integrator clamp (thrust fraction); +-12 % of max V thrust ~ +-6 gf of trim error
     YR_CAP=0.5, VF_CAP=0.4, VS_CAP=0.4, VZ_CAP=0.3,
     POS_ALPHA=0.3, VEL_BETA=0.05,    # alpha-beta position/velocity filter on the vision fixes (prediction uses the commands)
     DUTY_MIN=0.1,         # duties below this are sent as 0: below the motor start threshold, and it keeps noise out of the props
-    A_BRAKE=0.08,         # m/s^2 the controller assumes it can brake at (reverse thrust is weak): approach speed = sqrt(2*A_BRAKE*d)
-    A_WALL=0.06,          # same idea for walls / obstacles, more conservative (touching a wall is worse than being late)
+    # Smoothness (2026-09-20, after the live log showed vf/vs slamming +-0.4 every frame): the velocity estimate is ~3 cm/s
+    # noisy, K_V turns that into thrust, and the sqrt linearisation has infinite gain at zero. So: no thrust for velocity
+    # errors under V_DEAD, a linear section below 2 x DUTY_MIN instead of the sqrt, a first-order low-pass on the forward /
+    # sideways commands, and every threshold in the law is a ramp (deadbands, the person-speed feed-forward, the dodge).
+    V_DEAD=0.04,          # m/s, velocity error below which the velocity loop asks for nothing (the props cannot do 3 cm/s anyway)
+    CMD_TAU_S=0.2,        # s, low-pass on vf / vs before the motor-start cut (0 = off); the heading twitch bypasses it (behaviors._smooth).
+                          # The box slews too (0.05 duty per 20 ms)
+    PV_GATE=(0.05, 0.15), # m/s, the person's walking speed is fed forward from 0 at the first to fully at the second (was a step at 0.1)
+    A_BRAKE=0.055,        # m/s^2 the controller assumes it can brake at (reverse thrust is weak): approach speed = sqrt(2*A_BRAKE*d).
+                          # Two motors at the 0.4 cap in reverse give ~0.11 m/s^2 with a stiff supply; the motors SHARE one battery
+                          # (2026-09-20) and four running together take a third of that away, hence 0.055 (was 0.08)
+    A_WALL=0.045,         # same idea for walls / obstacles, more conservative (touching a wall is worse than being late)
     V_LAG_S=1.2,          # s the velocity loop needs to respond; obstacle distances are judged that far ahead
     NUDGE_CLEAR=1.0,      # m of clearance the pilot asks for before the blind heading acquisition (it warns below this)
     SLIDE_V_MAX=0.25,     # m/s max speed when sliding along a wall / around an obstacle
     PERSON_LOST_MS=2500,  # -> hover (vision drops the person for up to ~1 s when they turn or get occluded)
     BALLOON_LOST_MS=1500, # -> disarm
-    TELEM_LOST_MS=1000,   # armed and no telemetry for this long -> disarm (the board / fake_esp32 send at 20 Hz)
-    BOARD_OFF_N=6,        # board says armed:0 in this many consecutive frames while we are armed -> disarm (1-3 are normal right after arming)
+    TELEM_LOST_MS=1000,   # armed and no telemetry for this long -> disarm (the bridge sends 20 frames a second whatever the box does)
+    BOARD_OFF_N=12,       # board says armed:0 in this many consecutive frames (20 Hz) while we are armed -> disarm. With the onboard
+                          # mixer the bridge only says armed:1 once the BOX reports it is flying, and the box talks every 200 ms:
+                          # up to ~6 frames of armed:0 right after arming are normal, 12 (0.6 s) is a box that really did not take it
     AGE_WARN_MS=300,      # the board's 'ms since last command' above this -> print a link warning (its failsafe trips at 500)
     NUDGE_S=3.0, NUDGE_VF=0.3,   # heading-calibration nudge on first arm: fly forward, learn heading from the response
-    TWITCH_S=2.0, TWITCH_AFTER_S=40,   # re-learn heading with a short forward push after this long without a manoeuvre
+    TWITCH_S=2.5, TWITCH_AFTER_S=40,   # re-learn heading with a short forward push after this long without a manoeuvre (2.0 until
+                          # the CMD_TAU_S low-pass: the rounded push must carry the same thrust-time for the learner)
     K_ROT=0.9, ROT_MIN=0.08, ROT_CAP=0.7, ROT_DONE_RAD=0.09,   # rotate: yaw rate = K_ROT * remaining, floor ROT_MIN, cap ROT_CAP; done within 5 deg
     STANDOFF_ME=1.1, STANDOFF_PLACE=0.25, ARRIVE_M=0.2,   # "come here" stops 1.1 m from the person; places 0.25 m; arrived within +ARRIVE_M
     HOLD_DEADBAND=0.08, HOLD_V_MAX=0.3,   # hover = hold POSITION (gusts and the twitch would otherwise walk it away)

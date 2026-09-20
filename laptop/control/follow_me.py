@@ -6,7 +6,7 @@ Inputs : world state on 5007 (laptop/vision/localize.py, or fake_esp32 --sim)
          telemetry on 5006 (gyro yaw + yaw rate)
 Output : commands to the ESP32 on 5005
 
-  python -m laptop.control.follow_me                       # vs:  python -m laptop.control.fake_esp32 --sim --plot
+  python -m laptop.control.follow_me                       # vs:  python -m archive.fake_esp32 --sim --plot
   python -m laptop.control.follow_me                       # real gondola: python -m laptop.control.ble_gondola first (Bluetooth bridge)
   python -m laptop.control.follow_me --log [NAME]          # + record state/telemetry/commands to data/positioning/ (README 1c)
 
@@ -33,12 +33,26 @@ REV_EFF = config.PHYS["REV_EFF"]   # a fixed-pitch prop in reverse gives ~60 % t
 def lin(u, cap, boost=True):
     """Thrust goes with duty^2. Map a 'wanted thrust fraction' u in [-cap, cap] to the duty that produces it
     linearly, so small corrections are not wasted: lin(cap) == cap, lin(0.1*cap) gives 0.1 of the cap thrust.
-    Negative u (reverse) is boosted by 1/REV_EFF so braking accelerates as hard as the request says."""
+    Negative u (reverse) is boosted by 1/REV_EFF so braking accelerates as hard as the request says.
+    Below a duty of 2 x DUTY_MIN the sqrt is replaced by a straight line through zero: the sqrt's infinite slope there
+    turned 1 cm/s of velocity noise into 0.15 of duty every tick (the buzz seen live 2026-09-19)."""
     if u < 0 and boost:
         u /= REV_EFF
     u = clamp(u, -cap, cap)
-    d = math.copysign(math.sqrt(abs(u) * cap), u) if cap > 0 else 0.0
+    if cap <= 0:
+        return 0.0
+    d_lin = 2 * G["DUTY_MIN"]; u_lin = d_lin * d_lin / cap
+    a = abs(u)
+    d = math.sqrt(a * cap) if a >= u_lin else a * d_lin / u_lin
+    d = math.copysign(d, u)
     return d if abs(d) >= G["DUTY_MIN"] else 0.0
+
+
+def ramp(x, lo, hi):
+    """0 below lo, 1 above hi, linear in between: a threshold that does not jump."""
+    if hi <= lo:
+        return 1.0 if x >= hi else 0.0
+    return clamp((x - lo) / (hi - lo), 0.0, 1.0)
 
 
 def avoid(p, v_des, obstacles=None, arena=None, v=(0.0, 0.0), sides=None):
@@ -145,10 +159,18 @@ def nudge_ok(est, obstacles=None, arena=None):
 
 
 def velocity_cmd(est, v_des, obstacles=None, arena=None, sides=None):
-    """World-frame desired velocity -> body-frame (vf, vs) duties. Thrust = K_V * (v_des - v), rotated into the body."""
+    """World-frame desired velocity -> body-frame (vf, vs) duties. Thrust = K_V * (v_des - v), rotated into the body.
+    Velocity errors under V_DEAD ask for nothing (soft: the excess over V_DEAD is what counts), so the estimate's noise
+    does not reach the props."""
     v_des = avoid(est.p, v_des, obstacles, arena, est.v, sides)
-    ax = G["K_V"] * (v_des[0] - est.v[0])
-    ay = G["K_V"] * (v_des[1] - est.v[1])
+    ex, ey = v_des[0] - est.v[0], v_des[1] - est.v[1]
+    m, dead = math.hypot(ex, ey), G.get("V_DEAD", 0.0)
+    if m <= dead:
+        ex = ey = 0.0
+    elif dead > 0:
+        ex *= (m - dead) / m; ey *= (m - dead) / m
+    ax = G["K_V"] * ex
+    ay = G["K_V"] * ey
     c, s = math.cos(est.psi), math.sin(est.psi)
     uf = ax * c + ay * s                            # body +x = forward
     us = -ax * s + ay * c                           # body +y = left
@@ -190,28 +212,41 @@ def follow_cmd(est, person, standoff=None, v_max=None, obstacles=None, arena=Non
     e_psi = wrap(bearing - est.psi)
     yr = clamp(G["K_PSI"] * e_psi, -G["YR_CAP"], G["YR_CAP"])
     err_d = dist - standoff                                   # + = too far, - = too close
-    if dist > 1e-3 and abs(err_d) > G["D_DEADBAND"]:
+    db = G["D_DEADBAND"]
+    if dist > 1e-3 and abs(err_d) > db / 2:
         ux, uy = rx / dist, ry / dist
-        sp = clamp(G["K_P"] * err_d, -v_max, v_max)           # desired speed along the line to the person
-        brake = math.sqrt(2 * G["A_BRAKE"] * max(0.0, abs(err_d) - G["D_DEADBAND"] / 2))
+        # full K_P beyond the band, faded in over its outer half (a step at the edge jumped v_des by 0.1 m/s)
+        sp = clamp(G["K_P"] * err_d * ramp(abs(err_d), db / 2, db), -v_max, v_max)   # desired speed along the line to the person
+        brake = math.sqrt(2 * G["A_BRAKE"] * (abs(err_d) - db / 2))
         sp = math.copysign(min(abs(sp), brake), sp)           # ...but never faster than we can still stop from
         v_des = (ux * sp, uy * sp)
     else:
         v_des = (0.0, 0.0)                                    # inside the band: just move with the person
     v_des = (v_des[0] + person_v[0] + v_extra[0], v_des[1] + person_v[1] + v_extra[1])
     pspeed = math.hypot(*person_v)
-    if pspeed > 0.15 and dist < standoff + 0.6:              # person walking at us: step out of their path, sideways
+    # Person walking at us: step out of their path, sideways. Every condition is a ramp and the side is COMMITTED
+    # (sides["dodge"]) until the situation is over: re-picking it every tick flipped vs between +0.4 and -0.4.
+    k_dodge = ramp(pspeed, 0.10, 0.20) * ramp(standoff + 0.6 - dist, 0.0, 0.3)
+    dodged = False
+    if k_dodge > 0:
         ux_, uy_ = person_v[0] / pspeed, person_v[1] / pspeed
         along = -rx * ux_ - ry * uy_                          # > 0: we are ahead of them
         lateral = rx * uy_ - ry * ux_                         # > 0: we are on their left
-        if along > 0 and abs(lateral) < 1.0:
-            side = 1.0 if lateral >= 0 else -1.0
-            if abs(lateral) < 0.4:                                # nearly dead ahead: step toward the OPEN side
-                room_l = room_ahead(est.p, (-uy_, ux_), obstacles, arena)
-                room_r = room_ahead(est.p, (uy_, -ux_), obstacles, arena)
-                side = 1.0 if room_l >= room_r else -1.0
-            dodge = 0.35 * (1.0 - abs(lateral))
+        k_dodge *= ramp(along, 0.0, 0.3) * ramp(1.0 - abs(lateral), 0.0, 0.2)
+        if k_dodge > 0:
+            side = sides.get("dodge") if sides is not None else None
+            if side is None:
+                side = 1.0 if lateral >= 0 else -1.0
+                if abs(lateral) < 0.4:                            # nearly dead ahead: step toward the OPEN side
+                    room_l = room_ahead(est.p, (-uy_, ux_), obstacles, arena)
+                    room_r = room_ahead(est.p, (uy_, -ux_), obstacles, arena)
+                    side = 1.0 if room_l >= room_r else -1.0
+                if sides is not None: sides["dodge"] = side
+            dodge = 0.35 * k_dodge * (1.0 - abs(lateral))
             v_des = (v_des[0] - side * dodge * uy_, v_des[1] + side * dodge * ux_)
+            dodged = True
+    if not dodged and sides is not None:
+        sides.pop("dodge", None)
     mag = math.hypot(*v_des)
     if mag > G["V_ABS_MAX"]:
         v_des = (v_des[0] / mag * G["V_ABS_MAX"], v_des[1] / mag * G["V_ABS_MAX"])

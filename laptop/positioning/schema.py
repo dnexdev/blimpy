@@ -5,7 +5,7 @@ Log format (data/positioning/<session>/log.jsonl), one JSON object per line:
   state  data = PROTOCOL.md s4 datagram verbatim   {"t","balloon":[x,y,z]|null,"person":[x,y,z]|null,"person_id","src",...}
   telem  data = PROTOCOL.md s3 datagram verbatim   {"t","yaw","yr","pitch","roll","alt","vbat","armed","age","mL","mR","mS","mV"}
   cmd    data = PROTOCOL.md s2 datagram verbatim   {"t","vf","vs","yr","vz","arm"}
-  truth  data = laptop/sim/world.py World.truth (+ "t"): ground truth, simulator only
+  truth  data = archive/sim/world.py World.truth (+ "t"): ground truth, simulator only
   event  data = {"text": "arm", ...any keyword fields}  markers: arm/disarm, intents, notes
 Never re-key upstream messages here: a producer may add fields and old logs must still load (session.load is generic).
 

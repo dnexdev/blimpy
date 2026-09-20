@@ -1,5 +1,31 @@
 # DETAILS 
 
+## Flight commands (onboard mixer, 2026-09-20)
+
+Telemetry now goes out every **200 ms**, too slow for a control loop on the laptop, so the fast part runs on the
+master: the laptop sends setpoints, the box mixes on its own gyro at 50 Hz. Added to `esp32_master.ino` (section
+"ONBOARD FLIGHT MIXER"), the bench commands below are unchanged:
+
+| Command | What it does |
+|---|---|
+| `CMD vf vs yr vz` | flight setpoints, percent -100..100: forward, sideways (+ = left), yaw rate (+ = counter-clockwise from above, 100 = 1 rad/s), up. The box runs the yaw-rate PI on the gyro, slews 0.05 duty per 20 ms, caps each motor at 50 % and the four together at 120 %, and **stops every motor 500 ms after the last CMD**. Not echoed on Serial (10 a second). |
+| `MAP LF- RD- SE+ VC+ G+` | which motor letter plays which role: L / R rear left / right, S sideways, V vertical; the sign is the direction for a positive command; `G-` if a counter-clockwise turn gives a negative gz. Saved in flash (Preferences). The laptop sends it on every connection from `calib/motor_map.json`. `MAP` alone prints it. |
+| `STATUS` | map, mode (raw / CMD flying / CMD timed out), setpoints, duties, percent per letter, yaw, gyro zero, slave status, BLE state |
+| `C 30` `D -30` `E 50` `F 100` `ALL 30` `MOTORS c d e f` `STOP` | as before. Any of them switches the mixer OFF first (motors it does not name would otherwise keep running). |
+
+Telemetry line (one every 200 ms):
+`A:ax,ay,az;G:gx,gy,gz;yaw:d;gzc:d;st:s;age:ms;mc:p;md:p;me:p;mf:p;bias:d` = accelerometer (g), gyro raw (deg/s),
+heading integrated on the box (deg, CCW+, wrapped), yaw rate after the gyro zero and sign (deg/s), state (0 bench,
+1 flying CMD, 2 CMD timed out), ms since the last CMD (-1 none), percent per letter, gyro zero in use (deg/s). The
+gyro zero is learnt while the motors are off and the box is still: keep it still for a few seconds after power-up.
+
+Also in this revision: BLE writes are queued and handled in `loop()` (the Bluetooth task no longer touches I2C or
+the motors); `onDisconnect` only sets a flag, `loop()` stops the motors and re-asserts advertising every 3 s while
+nobody is connected (the restart from inside the callback failed silently on 2026-09-19 and the box went dark until
+a power cycle); `BLEDevice::setMTU(185)` so the ~100-character line is not truncated; the slave stops C/D 600 ms after
+the last I2C packet (`esp32_slave.ino`), the master resends C/D at least every 200 ms; the per-packet I2C print is
+quiet unless the values changed.
+
 ## Python BLE control reference
 
 [`reference_control.py`](reference_control.py) is the reference for controlling

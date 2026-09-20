@@ -168,10 +168,27 @@ void stopAllMotors() {
 
 
 // ============================================================
+// I2C TIMEOUT
+//
+// The master resends C/D at least every 200 ms while flying
+// (and on every change). No packet for this long = the master
+// died or the wire came off: stop, rather than spin forever.
+// ============================================================
+
+constexpr unsigned long I2C_TIMEOUT_MS = 600;
+
+volatile unsigned long lastPacketMs = 0;
+volatile bool packetSeen = false;
+
+
+// ============================================================
 // I2C RECEIVE CALLBACK
 // ============================================================
 
 void onReceive(int byteCount) {
+  lastPacketMs = millis();
+  packetSeen = true;
+
   if (byteCount < 2) {
     while (Wire.available()) {
       Wire.read();
@@ -570,24 +587,52 @@ void loop() {
     );
 
 
-    Serial.print(
-      "I2C -> M1: "
-    );
+    // The master repeats the packet every 200 ms as a heartbeat:
+    // only print when the values changed.
+    static int8_t shownM1 = 0;
+    static int8_t shownM2 = 0;
 
-    Serial.print(
-      m1
-    );
+    if (m1 != shownM1 || m2 != shownM2) {
+      shownM1 = m1;
+      shownM2 = m2;
 
-    Serial.print(
-      "%   M2: "
-    );
+      Serial.print(
+        "I2C -> M1: "
+      );
 
-    Serial.print(
-      m2
-    );
+      Serial.print(
+        m1
+      );
+
+      Serial.print(
+        "%   M2: "
+      );
+
+      Serial.print(
+        m2
+      );
+
+      Serial.println(
+        "%"
+      );
+    }
+  }
+
+
+  // ==========================================================
+  // I2C TIMEOUT -> motors off
+  // ==========================================================
+
+  if (
+    packetSeen &&
+    millis() - lastPacketMs > I2C_TIMEOUT_MS
+  ) {
+    packetSeen = false;
+
+    stopAllMotors();
 
     Serial.println(
-      "%"
+      "I2C silent for 600 ms -> motors off"
     );
   }
 

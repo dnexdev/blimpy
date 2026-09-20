@@ -17,20 +17,30 @@ legacy WiFi firmware in `firmware/` implements sections 2-3 and 7-9 on the board
 All UDP. One JSON object per datagram. No newline needed. Unknown keys are ignored.
 Telemetry is sent to whichever IP most recently sent a command.
 
-## 1b. Gondola over Bluetooth LE (the hardware team's firmware)
+## 1b. Gondola over Bluetooth LE (`firmware/esp32_master.ino`)
 
 Discover by advertised service UUID `12345678-1234-1234-1234-123456789000`, matching
 `firmware/reference_control.py`; the device name `BalloonRobot` may be absent. `--name` optionally adds a name filter.
 Two GATT characteristics (UUIDs in `config.BLE`):
-- **command** (write without response), ASCII: `C 40` / `D -40` / `E 50` / `F 100` (one motor, percent, sign =
-  direction), `ALL 30`, `MOTORS c d e f` (percent for motors C D E F), `STOP`.
-- **telemetry** (notify): one IMU text line per sample. The layout is the firmware's; `config.BLE` `IMU_FIELDS` /
-  `GYRO_UNITS` / `GYRO_SIGN` describe it and `laptop/control/imu_store.py` parses it (key=value, JSON or bare numbers).
+- **command** (write without response), ASCII.
+  Flight (the **onboard mixer**, 2026-09-20): `CMD vf vs yr vz` (percent, -100..100: forward, sideways + = left, yaw
+  rate + = CCW with 100 = 1 rad/s, up), sent 10 times a second; the box runs the section 7 mixer itself at 50 Hz on its
+  own gyro, slews, and stops the motors 500 ms after the last `CMD`. `MAP LF- RD- SE+ VC+ G+` tells it which motor
+  LETTER plays L / R / S / V and its sign, and the gyro sign (saved in flash; the bridge sends it on every connection,
+  from `calib/motor_map.json` via `config.BLE`). `STATUS` prints everything on the box's serial monitor.
+  Bench (all builds): `C 40` / `D -40` / `E 50` / `F 100` (one motor, percent, sign = direction), `ALL 30`,
+  `MOTORS c d e f` (percent for motors C D E F), `STOP`. Any of these switches the onboard mixer off first.
+- **telemetry** (notify), every 200 ms:
+  `A:ax,ay,az;G:gx,gy,gz;yaw:d;gzc:d;st:s;age:ms;mc:p;md:p;me:p;mf:p;bias:d` = accelerometer (g), gyro (deg/s, raw),
+  heading integrated on the box (deg, CCW+; drifts slowly, the laptop learns the offset), yaw rate after the box's
+  gyro zero and sign (deg/s), state (0 bench, 1 flying our setpoints, 2 timed out), ms since the last `CMD`, percent
+  per letter, the gyro zero in use. `laptop/control/imu_store.py` parses it (and the older `A:..;G:..;T:..` line).
 
-The bridge maps our L/R/S/V to the letters (`config.BLE` `MOTORS`, `SIGN`), runs the section 7 mixer at 50 Hz on the
-laptop with the yaw rate from the IMU, writes `MOTORS` at most 20 times a second (or every 250 ms unchanged), and
-turns the IMU into section 3 telemetry: `alt` and `vbat` are -1, plus `imu_age` (ms) and `ble` (0/1). Percent = mixer
-duty x 100, so normal flight stays within +-50. The latest sample is also served on `http://127.0.0.1:5008/imu`.
+The bridge tells the two firmware generations apart from the first telemetry line (`st:` present = onboard mixer) and
+turns it into section 3 telemetry: `yaw` / `yr` from the box, `armed` = the box says it is flying our setpoints (st 1),
+`mL..mV` = the duties the box reports, `alt` and `vbat` -1, plus `imu_age` (ms), `ble` (0/1), `onboard`, `st`. With an
+older build (per-motor percentages only) it runs the mixer itself at 50 Hz and writes `MOTORS` lines at 20 Hz. The
+latest sample is also served on `http://127.0.0.1:5008/imu`.
 
 ## 2. Command (5005)
 
@@ -76,7 +86,7 @@ The second form is the **eye on the balloon** (`laptop/vision/fpv.py`, or the si
 to the gondola camera. `bearing` rad, + = the person is to the LEFT (a counter-clockwise yaw centres them); `elev` rad
 from the camera axis; `range` m from the person's height in the frame, `null` when the box is cut by the frame (closer
 than ~1 m); `box` normalised. It carries no world position: `balloon`/`person` are null in such rows. Consumers
-(`pilot.py`, `tools/scenarios.py`) call `Behaviors.on_fpv`. With no room camera at all the pilot runs `--relative`.
+(`pilot.py`, `archive/tools/scenarios.py`) call `Behaviors.on_fpv`. With no room camera at all the pilot runs `--relative`.
 ```
 ```
 `null` when not seen in this frame. Metres, world frame. `src` is `"vision"` or `"sim"` (`"fused"` from laptop/positioning/fuse.py).
@@ -134,7 +144,7 @@ a fixed prop in reverse gives ~60 % thrust).
 | yr = 1.0   | 1.0 rad/s CCW  | YR_MAX = 1.0 rad/s |
 | vf, vs, vz | motor duty fractions; laptop caps them at 0.3–0.4 | CAP = 0.5 in the mixer |
 
-## 7. Mixer (50 Hz) — `laptop/control/protocol.py::mix`, run by the bridge (the legacy WiFi build ran it on the board; that source left the repo 2026-09-19, git history before `de42b4c`)
+## 7. Mixer (50 Hz) — on the box (`firmware/esp32_master.ino`, `controlTick`, since 2026-09-20); `laptop/control/protocol.py::mix` is its twin (the bridge runs it for an older build)
 
 ```
 gzNorm = measured_yaw_rate / YR_MAX          (0 if no IMU -> open loop)
@@ -145,7 +155,11 @@ mL_t   = clamp(vf - diff, -CAP, CAP)         CAP  = 0.5
 mR_t   = clamp(vf + diff, -CAP, CAP)
 mS_t   = clamp(vs,        -CAP, CAP)
 mV_t   = clamp(vz,        -CAP, CAP)
+if |mL_t|+|mR_t|+|mS_t|+|mV_t| > TOTAL_CAP: scale all four down to it     TOTAL_CAP = 1.2 (the motors share one supply:
+                                              four at 0.4 together sag it toward a brown-out; seen 2026-09-20)
 each motor moves toward its target by at most SLEW = 0.05 per tick (=> 0 to 0.5 in 0.2 s)
+The box also zeroes its gyro while the motors are off and it is still (telemetry `bias`), integrates `yaw` from it,
+and stops everything 500 ms after the last CMD.
 Legacy WiFi build only. Each motor = one DRV8833 channel driven as PWM + DIR (IN1 = PWM 25 kHz, IN2 = DIR):
   value >= 0: DIR low,  duty = value        (fast decay)
   value <  0: DIR high, duty = 1 - |value|  (slow decay; reverse)
@@ -154,11 +168,12 @@ The ESP32-C3 has only 6 PWM channels, which is why it is PWM+DIR and not two PWM
 
 ## 8. Failsafe / arming
 
-- Motors spin only if `arm == 1` **and** age < 500 ms **and** the gondola link is up. Otherwise the bridge sends `STOP`
-  (repeated once a second while disarmed), resets the yaw integrator and reports `armed = 0`. Legacy WiFi build: all
-  PWM 0, DRV8833 nSLEEP LOW.
-- The Bluetooth firmware keeps the last percentages if the bridge process dies. It should add its own STOP after
-  500 ms without a command (asked of the hardware team); until then the bench test in README 3 step 4 is mandatory.
+- Motors spin only if `arm == 1` **and** age < 500 ms **and** the gondola link is up **and** (onboard mixer) the box
+  has talked in the last 1.5 s. Otherwise the bridge sends `STOP` (repeated once a second while disarmed), resets the
+  yaw integrator and reports `armed = 0`. Legacy WiFi build: all PWM 0, DRV8833 nSLEEP LOW.
+- The onboard-mixer firmware stops its motors 500 ms after the last `CMD` on its own, on a link loss, and the slave
+  board stops C/D 600 ms after the last I2C packet: the box is safe if the bridge process dies. An older build keeps
+  the last percentages, so the bench test in README 3 step 4 is mandatory there.
 - Laptop sends `arm:0` three times when a program exits.
 - Legacy WiFi build: ESP32 status LED (shares GPIO 8 with nSLEEP, active low): **off = armed**, slow blink (1 Hz) = idle & talking
   to the laptop, fast blink (4 Hz) = no commands for 2 s / no WiFi.

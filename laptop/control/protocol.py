@@ -13,6 +13,8 @@ PEOPLE_PORT = 5018        # mono -> anyone: EVERYBODY in view {"t","src":"people
 ROOM_HTTP_PORT = 5019     # mono's picture + that frame's people over localhost HTTP (laptop/vision/eyes.py). 5008 is the bridge's.
 
 CAP = 0.5           # max motor duty after mixing
+TOTAL_CAP = 1.2     # max SUM of |duty| over the four motors: the motors share one supply (2026-09-20: more motors on = the
+                    # others slow down), and four at 0.4 together sag it toward a brown-out. Over budget = all four scaled down
 K_YR = 1.0          # yaw-rate P gain in the mixer (balloon has ~no yaw damping; needs authority)
 KI_YR = 1.0         # yaw-rate I gain (per second): cancels steady torques, e.g. the sideways motor not exactly through the centre
 I_YR_MAX = 0.15     # integrator clamp (motor duty)
@@ -69,6 +71,9 @@ def mix(sp, gz_norm, cur, state=None):
         state["yawI"] = yaw_i
     diff = K_YR * err + yaw_i
     tgt = (clamp(vf - diff, -CAP, CAP), clamp(vf + diff, -CAP, CAP), clamp(vs, -CAP, CAP), clamp(vz, -CAP, CAP))
+    tot = sum(abs(t) for t in tgt)
+    if tot > TOTAL_CAP:
+        tgt = tuple(t * TOTAL_CAP / tot for t in tgt)
     return tuple(c + clamp(t - c, -SLEW, SLEW) for c, t in zip(cur, tgt))
 
 

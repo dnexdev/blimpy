@@ -435,7 +435,7 @@ The design behind these steps (what the software assumes and why) is in `docs/RO
 - the mat and the camera as in S10
 
 **Do**
-1. Run `python tools/rehearse.py --person real`. It starts the room camera on its own port, the simulator with a virtual balloon, and the pilot. SPACE arms.
+1. Run `python archive/tools/rehearse.py --person real`. It starts the room camera on its own port, the simulator with a virtual balloon, and the pilot. SPACE arms.
 2. Stand in view. Say `Blimpy, follow me.` Walk a slow circle. Say `Blimpy, stop.` Then `turn left`, `what do you see`, `set a timer for one minute`.
 3. Run through the whole demo script once, timed. Write down every line that was misheard or ignored.
 4. ESC to end. This run is also the fallback demo if the real balloon is not flying tomorrow.
@@ -445,7 +445,7 @@ The design behind these steps (what the software assumes and why) is in `docs/RO
 
 **If not**
 - Nothing heard: `python -m laptop.voice.omni --meter` shows whether the mic opens when you talk; AirPods need `--mic AirPods --spk Speakers` after `--`.
-- No key or no network: `python tools/rehearse.py --person real -- --voice local` (offline, `v` for push-to-talk).
+- No key or no network: `python archive/tools/rehearse.py --person real -- --voice local` (offline, `v` for push-to-talk).
 - It follows the wrong person: it takes the largest person in the picture. Others step out of view.
 
 #### Step S14. Run the simulator suite with the real balloon's numbers
@@ -454,7 +454,7 @@ The design behind these steps (what the software assumes and why) is in `docs/RO
 - `laptop/config.py` with D and the provisional `M_GONDOLA` from S4 and S9
 
 **Do**
-1. Run `python tools/scenarios.py --seeds 3` (about a minute).
+1. Run `python archive/tools/scenarios.py --seeds 3` (about a minute).
 2. Run `python tools/control_test.py`.
 3. Commit: `git add laptop/config.py calib/MEASUREMENTS.md` then `git commit -m "balloon measured: D, lift, provisional gondola weight"` and `git push`.
 
@@ -705,7 +705,7 @@ The design behind these steps (what the software assumes and why) is in `docs/RO
 2. Measure floor to the widest point of the balloon (the equator): E. Measure floor to the motor bar: M. `ARM_BELOW` = E minus M.
 3. In `laptop/config.py` `PHYS = dict(...)`: set `ARM_BELOW=` (metres). D, `M_GONDOLA` and `MOTOR_SPACING` are already there. Leave `TOF_BELOW` alone (no ultrasonic on this box).
 4. Log every number with today's date in `calib/MEASUREMENTS.md`.
-5. Run `python tools/scenarios.py --seeds 3` and `python tools/control_test.py`. Commit and push `laptop/config.py` and `calib/MEASUREMENTS.md`.
+5. Run `python archive/tools/scenarios.py --seeds 3` and `python tools/control_test.py`. Commit and push `laptop/config.py` and `calib/MEASUREMENTS.md`.
 
 **You should see**
 - `ALL PASS` from the scenarios (about a minute) and `PASS` from the control test.

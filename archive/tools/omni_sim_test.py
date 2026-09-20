@@ -2,14 +2,14 @@
 -> set_intent tool calls -> behaviors -> commands -> BLE bridge -> simulated gondola (eye on the balloon + ultrasonic)
 -> state / telemetry back -> the same loop. Exactly the pilot's chain, minus the keyboard, the mic and the speakers.
 
-  set YIBU_API_KEY, then:   python tools/omni_sim_test.py [--relative]        (~2 min, ~8 cloud calls, purpose sim_rehearsal)
+  set YIBU_API_KEY, then:   python archive/tools/omni_sim_test.py [--relative]        (~2 min, ~8 cloud calls, purpose sim_rehearsal)
 
 Checks: "Blimpy, follow me" -> FOLLOW and the sim balloon settles about 1.5 m from the person, facing them (the eye);
 "turn left ninety degrees" -> ROTATE and the gyro yaw grows by ~90 deg; "stop and hover" -> HOVER with quiet motors;
 a six-second timer set by voice is announced by the cloud voice ([EVENT] path). --relative: the sim has no room camera.
 """
 import argparse, json, math, os, pathlib, statistics, subprocess, sys, threading, time, wave
-ROOT = pathlib.Path(__file__).resolve().parents[1]
+ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT)); os.chdir(ROOT)
 from laptop import config
 from laptop.control.behaviors import Behaviors

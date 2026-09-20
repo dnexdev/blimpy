@@ -5,6 +5,7 @@
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <BLE2902.h>
+#include <Preferences.h>
 
 
 // ============================================================
@@ -98,6 +99,85 @@ struct IMUData {
 
   float temperature;
 };
+
+
+// ============================================================
+// ONBOARD FLIGHT MIXER  (Blimpy, 2026-09-20)
+//
+// The laptop used to run the mixer itself and write MOTORS 20
+// times a second, closing the yaw loop on the IMU stream. With
+// telemetry every 200 ms that loop is blind, so the fast part
+// moved here. The laptop now sends SETPOINTS:
+//
+//   CMD vf vs yr vz      percent, -100..100
+//                        vf forward   vs sideways (+ = left)
+//                        yr yaw rate  (+ = counter-clockwise seen
+//                           from above, 100 = 1 rad/s)
+//                        vz up
+//   MAP LC+ RD- SE+ VF+ G+
+//                        which motor LETTER plays which ROLE:
+//                        L/R rear left/right, S sideways, V vertical.
+//                        Sign = direction for a positive command.
+//                        G = gyro sign (G- if turning CCW gives a
+//                        negative gz). Saved in flash; the laptop
+//                        also sends it on every connection.
+//   MAP                  print the map     STATUS  print everything
+//
+// Every 20 ms: read the gyro, yaw-rate PI -> L/R difference, slew,
+// write the four motors. No CMD for CMD_TIMEOUT_MS -> motors off.
+// The bench commands (C 30 / MOTORS / ALL / STOP) keep working:
+// any of them switches the mixer off first.
+// Same maths as laptop/control/protocol.py::mix (PROTOCOL.md s7).
+// ============================================================
+
+constexpr float MIX_CAP    = 0.5f;    // max duty after mixing (50 %)
+constexpr float MIX_TOTAL  = 1.2f;    // max SUM of |duty| over the four motors: they share one supply, and four
+                                      // at 0.4 together sag it toward a brown-out. Over budget = all scaled down
+constexpr float MIX_K_YR   = 1.0f;    // yaw-rate P gain
+constexpr float MIX_KI_YR  = 1.0f;    // yaw-rate I gain, per second
+constexpr float MIX_I_MAX  = 0.15f;   // integrator clamp (duty)
+constexpr float MIX_SLEW   = 0.05f;   // max duty change per tick (0 -> 0.5 in 0.2 s)
+constexpr float MIX_DT     = 0.02f;   // s, control tick
+constexpr float YR_MAX_DPS = 57.2958f;  // yr = 100 means 1 rad/s
+
+constexpr unsigned long CONTROL_INTERVAL_MS = 20;
+constexpr unsigned long CMD_TIMEOUT_MS      = 500;   // no CMD for this long -> motors off
+constexpr unsigned long SLAVE_HEARTBEAT_MS  = 200;   // C/D resent at least this often (the slave stops at 600 ms)
+constexpr unsigned long ADVERTISE_EVERY_MS  = 3000;  // while nobody is connected, re-assert advertising
+
+// role -> motor letter (0 = C, 1 = D, 2 = E, 3 = F) and sign
+int8_t roleLetter[4] = {0, 1, 2, 3};   // L R S V
+int8_t roleSign[4]   = {1, 1, 1, 1};
+int8_t gyroSign      = 1;
+
+bool  cmdMode     = false;   // true after a CMD; false after any raw motor command, STOP or a link loss
+bool  cmdTimedOut = false;
+unsigned long lastCmdMs = 0;
+float sp[4]  = {0, 0, 0, 0};  // setpoints vf vs yr vz, -1..1
+float cur[4] = {0, 0, 0, 0};  // current duties L R S V, -1..1
+float yawI   = 0;
+
+IMUData lastImu;
+bool  imuOk  = false;
+float yawDeg = 0;      // heading integrated here at 50 Hz, CCW positive, wrapped to +-180
+float gzDps  = 0;      // gyro z after zero and sign, deg/s
+float gzBias = 0;      // gyro zero, learnt while the motors are off and the box is still
+
+unsigned long lastControl   = 0;
+unsigned long lastSlaveSend = 0;
+unsigned long lastAdvertise = 0;
+uint8_t slaveStatus = 255;
+
+Preferences prefs;
+
+// BLE writes are queued here and handled in loop(): the Bluetooth
+// stack has its own task, and the motors / I2C must be touched
+// from one place only.
+constexpr int CMD_QUEUE_N = 8;
+char cmdQueue[CMD_QUEUE_N][80];
+volatile int cmdHead = 0;
+volatile int cmdTail = 0;
+volatile bool linkLost = false;
 
 
 // ============================================================
@@ -690,7 +770,9 @@ void motorF(
 // byte 1 = D (-100..100)
 // ============================================================
 
-bool sendSlaveMotors() {
+bool sendSlaveMotorsV(
+  bool verbose
+) {
   Wire.beginTransmission(
     MOTOR_SLAVE_ADDR
   );
@@ -708,39 +790,57 @@ bool sendSlaveMotors() {
   uint8_t error =
     Wire.endTransmission();
 
+  slaveStatus = error;
+  lastSlaveSend = millis();
+
 
   // ==========================================================
-  // I2C DEBUG
+  // I2C DEBUG  (the mixer calls this 50 times a second: quiet
+  // unless asked, errors at most once a second)
   // ==========================================================
 
-  Serial.print(
-    "I2C -> slave C="
-  );
+  static unsigned long lastErrPrint = 0;
 
-  Serial.print(
-    motorCValue
-  );
+  if (
+    verbose ||
+    (error != 0 && millis() - lastErrPrint > 1000)
+  ) {
+    if (error != 0) lastErrPrint = millis();
 
-  Serial.print(
-    " D="
-  );
+    Serial.print(
+      "I2C -> slave C="
+    );
 
-  Serial.print(
-    motorDValue
-  );
+    Serial.print(
+      motorCValue
+    );
 
-  Serial.print(
-    " status="
-  );
+    Serial.print(
+      " D="
+    );
 
-  Serial.println(
-    error
-  );
+    Serial.print(
+      motorDValue
+    );
+
+    Serial.print(
+      " status="
+    );
+
+    Serial.println(
+      error
+    );
+  }
 
 
   return (
     error == 0
   );
+}
+
+
+bool sendSlaveMotors() {
+  return sendSlaveMotorsV(true);
 }
 
 
@@ -857,6 +957,340 @@ void scanMotorSlave() {
 
 
 // ============================================================
+// ONBOARD FLIGHT MIXER: map, status, control tick
+// ============================================================
+
+String mapString() {
+  const char roles[5]   = "LRSV";
+  const char letters[5] = "CDEF";
+  String s;
+
+  for (int r = 0; r < 4; r++) {
+    if (r) s += ' ';
+    s += roles[r];
+    s += letters[roleLetter[r]];
+    s += (roleSign[r] < 0) ? '-' : '+';
+  }
+
+  s += " G";
+  s += (gyroSign < 0) ? '-' : '+';
+  return s;
+}
+
+
+// "LC+ RD- SE+ VF+ G+"  (also accepts L=C+, L:C-, LC). All four
+// roles must be given, on four different letters; G is optional.
+bool parseMap(
+  String s
+) {
+  int8_t letter[4] = {-1, -1, -1, -1};
+  int8_t sign[4]   = {1, 1, 1, 1};
+  int8_t g = gyroSign;
+
+  s.trim();
+  s.toUpperCase();
+
+  int start = 0;
+
+  while (start < (int)s.length()) {
+    int space = s.indexOf(' ', start);
+    if (space < 0) space = s.length();
+
+    String tok = s.substring(start, space);
+    start = space + 1;
+
+    tok.replace("=", "");
+    tok.replace(":", "");
+    tok.trim();
+
+    if (tok.length() == 0) continue;
+
+    char first = tok.charAt(0);
+
+    if (first == 'G') {
+      g = (tok.indexOf('-') >= 0) ? -1 : 1;
+      continue;
+    }
+
+    int ri = String("LRSV").indexOf(first);
+    if (ri < 0 || tok.length() < 2) return false;
+
+    int li = String("CDEF").indexOf(tok.charAt(1));
+    if (li < 0) return false;
+
+    letter[ri] = li;
+    sign[ri]   = (tok.indexOf('-') >= 0) ? -1 : 1;
+  }
+
+  for (int i = 0; i < 4; i++) {
+    if (letter[i] < 0) return false;
+
+    for (int j = 0; j < i; j++) {
+      if (letter[i] == letter[j]) return false;
+    }
+  }
+
+  for (int i = 0; i < 4; i++) {
+    roleLetter[i] = letter[i];
+    roleSign[i]   = sign[i];
+  }
+
+  gyroSign = g;
+  return true;
+}
+
+
+void saveMap() {
+  prefs.putString("map", mapString());
+}
+
+
+void loadMap() {
+  String m = prefs.getString("map", "");
+
+  if (m.length() && parseMap(m)) {
+    Serial.print("Motor map from flash: ");
+  } else {
+    Serial.print("Motor map default (send MAP ... to set): ");
+  }
+
+  Serial.println(mapString());
+}
+
+
+// Mixer off, everything zero, motors off. Called for STOP, a raw
+// motor command, a link loss.
+void mixerOff(
+  const char* why
+) {
+  bool was = cmdMode;
+
+  cmdMode = false;
+  cmdTimedOut = false;
+  yawI = 0;
+
+  for (int i = 0; i < 4; i++) {
+    sp[i] = 0;
+    cur[i] = 0;
+  }
+
+  allOff();
+
+  if (was) {
+    Serial.print("mixer off: ");
+    Serial.println(why);
+  }
+}
+
+
+// Duties L R S V -> percent per letter -> motors. C/D go to the
+// slave when they changed or as a heartbeat; E/F when changed.
+void writeRoles(
+  unsigned long now,
+  bool force
+) {
+  int8_t pct[4] = {0, 0, 0, 0};
+
+  for (int r = 0; r < 4; r++) {
+    pct[roleLetter[r]] =
+      (int8_t)lroundf(cur[r] * roleSign[r] * 100.0f);
+  }
+
+  bool cdChanged =
+    (pct[0] != motorCValue) ||
+    (pct[1] != motorDValue);
+
+  motorCValue = pct[0];
+  motorDValue = pct[1];
+
+  if (
+    force ||
+    cdChanged ||
+    now - lastSlaveSend >= SLAVE_HEARTBEAT_MS
+  ) {
+    sendSlaveMotorsV(false);
+  }
+
+  if (force || pct[2] != (int8_t)lroundf(motorEValue)) motorE(pct[2]);
+  if (force || pct[3] != (int8_t)lroundf(motorFValue)) motorF(pct[3]);
+}
+
+
+// CMD vf vs yr vz  (percent). Any number of values; missing = 0.
+void handleCmd(
+  String args
+) {
+  float v[4] = {0, 0, 0, 0};
+  int n = 0;
+
+  args.trim();
+  int start = 0;
+
+  while (n < 4 && start < (int)args.length()) {
+    int space = args.indexOf(' ', start);
+    if (space < 0) space = args.length();
+
+    String tok = args.substring(start, space);
+    start = space + 1;
+
+    if (tok.length() == 0) continue;
+
+    v[n++] = tok.toFloat();
+  }
+
+  for (int i = 0; i < 4; i++) {
+    sp[i] = constrain(v[i] / 100.0f, -1.0f, 1.0f);
+  }
+
+  if (!cmdMode) {
+    Serial.println("mixer on (CMD)");
+    yawI = 0;
+    for (int i = 0; i < 4; i++) cur[i] = 0;
+  }
+
+  cmdMode = true;
+  cmdTimedOut = false;
+  lastCmdMs = millis();
+}
+
+
+void printStatus() {
+  Serial.print("MAP ");
+  Serial.println(mapString());
+
+  Serial.print("mode: ");
+  Serial.print(cmdMode ? (cmdTimedOut ? "CMD timed out (motors off)" : "CMD flying") : "raw (bench commands)");
+
+  Serial.print("   age ");
+  Serial.print(cmdMode ? (long)(millis() - lastCmdMs) : -1L);
+  Serial.println(" ms");
+
+  Serial.print("setpoints vf vs yr vz: ");
+  for (int i = 0; i < 4; i++) { Serial.print(sp[i], 2); Serial.print(' '); }
+  Serial.println();
+
+  Serial.print("duties L R S V: ");
+  for (int i = 0; i < 4; i++) { Serial.print(cur[i], 2); Serial.print(' '); }
+  Serial.println();
+
+  Serial.print("percent C D E F: ");
+  Serial.print(motorCValue); Serial.print(' ');
+  Serial.print(motorDValue); Serial.print(' ');
+  Serial.print((int)lroundf(motorEValue)); Serial.print(' ');
+  Serial.println((int)lroundf(motorFValue));
+
+  Serial.print("imu ");
+  Serial.print(imuOk ? "ok" : "ERROR");
+  Serial.print("   yaw ");
+  Serial.print(yawDeg, 1);
+  Serial.print(" deg   gz ");
+  Serial.print(gzDps, 2);
+  Serial.print(" deg/s   gyro zero ");
+  Serial.print(gzBias, 2);
+  Serial.print("   slave status ");
+  Serial.print(slaveStatus);
+  Serial.print("   ble ");
+  Serial.println(deviceConnected ? "connected" : "advertising");
+}
+
+
+// One 50 Hz tick: gyro, heading, gyro zero, then the mixer.
+void controlTick(
+  unsigned long now
+) {
+  IMUData imu;
+
+  if (readIMU(imu)) {
+    lastImu = imu;
+    imuOk = true;
+  } else {
+    imuOk = false;
+  }
+
+  bool motorsIdle =
+    motorCValue == 0 &&
+    motorDValue == 0 &&
+    fabs(motorEValue) < 0.5f &&
+    fabs(motorFValue) < 0.5f;
+
+  if (imuOk) {
+    // Gyro zero: a MEMS gyro at rest does not read 0 (bench: -0.36
+    // deg/s = 20 degrees of heading a minute). Learn it while the
+    // motors are off and the box is still; wide gate for the first
+    // seconds after boot, then only small corrections.
+    float gate = (now < 8000) ? 5.0f : 0.6f;
+
+    if (motorsIdle && fabs(lastImu.gz - gzBias) < gate) {
+      gzBias += 0.01f * (lastImu.gz - gzBias);
+    }
+
+    gzDps = (lastImu.gz - gzBias) * gyroSign;
+    yawDeg += gzDps * MIX_DT;
+
+    if (yawDeg > 180.0f) yawDeg -= 360.0f;
+    else if (yawDeg <= -180.0f) yawDeg += 360.0f;
+  }
+
+  if (!cmdMode) {
+    // Bench mode: keep the slave's 600 ms timeout fed while C or D
+    // is running from a typed command.
+    if (
+      (motorCValue != 0 || motorDValue != 0) &&
+      now - lastSlaveSend >= SLAVE_HEARTBEAT_MS
+    ) {
+      sendSlaveMotorsV(false);
+    }
+
+    return;
+  }
+
+  if (now - lastCmdMs > CMD_TIMEOUT_MS) {
+    bool first = !cmdTimedOut;
+    cmdTimedOut = true;
+
+    if (first) Serial.println("mixer: no CMD for 500 ms -> motors off");
+
+    yawI = 0;
+    for (int i = 0; i < 4; i++) { sp[i] = 0; cur[i] = 0; }
+
+    writeRoles(now, first);
+    return;
+  }
+
+  float gzNorm = imuOk ? (gzDps / YR_MAX_DPS) : 0.0f;
+  float err = sp[2] - gzNorm;
+
+  if (imuOk) {
+    yawI = constrain(yawI + MIX_KI_YR * err * MIX_DT, -MIX_I_MAX, MIX_I_MAX);
+  } else {
+    yawI = 0;       // no gyro: open loop, P on the setpoint only
+  }
+
+  float diff = MIX_K_YR * err + yawI;
+
+  float tgt[4] = {
+    constrain(sp[0] - diff, -MIX_CAP, MIX_CAP),   // L
+    constrain(sp[0] + diff, -MIX_CAP, MIX_CAP),   // R
+    constrain(sp[1],        -MIX_CAP, MIX_CAP),   // S
+    constrain(sp[3],        -MIX_CAP, MIX_CAP)    // V
+  };
+
+  float total = fabs(tgt[0]) + fabs(tgt[1]) + fabs(tgt[2]) + fabs(tgt[3]);
+
+  if (total > MIX_TOTAL) {
+    float scale = MIX_TOTAL / total;
+    for (int i = 0; i < 4; i++) tgt[i] *= scale;
+  }
+
+  for (int i = 0; i < 4; i++) {
+    cur[i] += constrain(tgt[i] - cur[i], -MIX_SLEW, MIX_SLEW);
+  }
+
+  writeRoles(now, false);
+}
+
+
+// ============================================================
 // COMMAND PARSER
 //
 // Seamless:
@@ -873,6 +1307,13 @@ void scanMotorSlave() {
 // STOP
 //
 // SCAN
+//
+// Flight (onboard mixer, see the section above):
+//
+// CMD 20 0 0 0
+// MAP LC+ RD+ SE+ VF+ G+
+// MAP
+// STATUS
 // ============================================================
 
 void processCommand(
@@ -889,13 +1330,17 @@ void processCommand(
   }
 
 
-  Serial.print(
-    "Command: "
-  );
+  if (
+    !command.startsWith("CMD ")     // 10 a second in flight: not echoed
+  ) {
+    Serial.print(
+      "Command: "
+    );
 
-  Serial.println(
-    command
-  );
+    Serial.println(
+      command
+    );
+  }
 
 
   // ==========================================================
@@ -905,7 +1350,7 @@ void processCommand(
   if (
     command == "STOP"
   ) {
-    allOff();
+    mixerOff("STOP");
 
     Serial.println(
       "ALL MOTORS OFF"
@@ -925,6 +1370,96 @@ void processCommand(
     scanMotorSlave();
 
     return;
+  }
+
+
+  // ==========================================================
+  // ONBOARD MIXER: CMD / MAP / STATUS
+  // ==========================================================
+
+  if (
+    command.startsWith(
+      "CMD "
+    )
+  ) {
+    handleCmd(
+      command.substring(4)
+    );
+
+    return;
+  }
+
+
+  if (
+    command.startsWith(
+      "MAP "
+    )
+  ) {
+    if (
+      parseMap(
+        command.substring(4)
+      )
+    ) {
+      saveMap();
+
+      Serial.print(
+        "MAP saved: "
+      );
+
+      Serial.println(
+        mapString()
+      );
+    }
+
+    else {
+      Serial.println(
+        "MAP rejected: give all of L R S V on four different letters, e.g. MAP LC+ RD+ SE+ VF+ G+"
+      );
+    }
+
+    return;
+  }
+
+
+  if (
+    command == "MAP"
+  ) {
+    Serial.print(
+      "MAP "
+    );
+
+    Serial.println(
+      mapString()
+    );
+
+    return;
+  }
+
+
+  if (
+    command == "STATUS"
+  ) {
+    printStatus();
+
+    return;
+  }
+
+
+  // A raw motor command below = bench mode: the mixer lets go first
+  // (otherwise the motors it does not name would keep spinning).
+
+  if (
+    cmdMode &&
+    (
+      command.startsWith("C ") ||
+      command.startsWith("D ") ||
+      command.startsWith("E ") ||
+      command.startsWith("F ") ||
+      command.startsWith("ALL ") ||
+      command.startsWith("MOTORS ")
+    )
+  ) {
+    mixerOff("raw motor command");
   }
 
 
@@ -1170,16 +1705,11 @@ class ServerCallbacks
     deviceConnected = false;
 
 
-    // Safety
-    allOff();
-
-
-    Serial.println(
-      "BLE disconnected -> ALL MOTORS OFF"
-    );
-
-
-    BLEDevice::startAdvertising();
+    // Flags only. loop() stops the motors and restarts advertising:
+    // this runs on the Bluetooth stack's task, and an advertising
+    // restart from here failed silently on the bench (2026-09-19):
+    // the box then stayed invisible until it was power-cycled.
+    linkLost = true;
   }
 };
 
@@ -1206,21 +1736,59 @@ class CommandCallbacks
     }
 
 
-    Serial.print(
-      "BLE -> "
+    // Queue it for loop(): BLE and Serial use the exact same command
+    // system, but the motors and the I2C bus are touched from loop()
+    // only (this callback runs on the Bluetooth task). A full queue
+    // drops the newest command; at 10 CMD a second it never fills.
+    int next = (cmdHead + 1) % CMD_QUEUE_N;
+
+    if (
+      next == cmdTail
+    ) {
+      return;
+    }
+
+    strncpy(
+      cmdQueue[cmdHead],
+      command.c_str(),
+      sizeof(cmdQueue[0]) - 1
     );
 
-    Serial.println(
-      command
+    cmdQueue[cmdHead][sizeof(cmdQueue[0]) - 1] = 0;
+
+    cmdHead = next;
+  }
+};
+
+
+// Called from loop(): every command the Bluetooth task queued.
+void drainCommandQueue() {
+  while (
+    cmdTail != cmdHead
+  ) {
+    String command(
+      cmdQueue[cmdTail]
     );
 
+    cmdTail = (cmdTail + 1) % CMD_QUEUE_N;
 
-    // BLE and Serial use exact same command system
+    if (
+      !command.startsWith("CMD ")     // 10 a second: keep the serial monitor readable
+    ) {
+      Serial.print(
+        "BLE -> "
+      );
+
+      Serial.println(
+        command
+      );
+    }
+
     processCommand(
       command
     );
   }
-};
+}
 
 
 // ============================================================
@@ -1230,6 +1798,13 @@ class CommandCallbacks
 void initBLE() {
   BLEDevice::init(
     "BalloonRobot"
+  );
+
+
+  // Telemetry lines are ~100 characters: allow the laptop to
+  // negotiate a bigger packet than the 20-byte default.
+  BLEDevice::setMTU(
+    185
   );
 
 
@@ -1320,82 +1895,93 @@ void initBLE() {
 
 
 // ============================================================
-// IMU TELEMETRY
+// TELEMETRY
 //
-// 20ms = 50 Hz
+// 200 ms = 5 Hz. The IMU itself is read every 20 ms by the
+// control tick (heading integrated there); this only reports.
+//
+// One line:
+//   A:ax,ay,az;G:gx,gy,gz;yaw:d;gzc:d;st:s;age:ms;mc:p;md:p;me:p;mf:p;bias:d
+//   A g, G deg/s raw, yaw deg (CCW+, integrated on the box, drifts
+//   slowly: the laptop learns the offset), gzc deg/s after zero and
+//   sign, st 0 = raw/bench 1 = CMD flying 2 = CMD timed out,
+//   age ms since the last CMD (-1 none), mc..mf percent per letter,
+//   bias = the gyro zero in use.
 // ============================================================
 
 constexpr unsigned long
-  TELEMETRY_INTERVAL_MS = 20;
+  TELEMETRY_INTERVAL_MS = 200;
 
 unsigned long lastTelemetry = 0;
 
 
 // ============================================================
-// SEND IMU TELEMETRY
+// SEND TELEMETRY
 // ============================================================
 
 void sendTelemetry() {
-  IMUData imu;
+  char buffer[160];
+
+  int st = cmdMode ? (cmdTimedOut ? 2 : 1) : 0;
+  long age = cmdMode ? (long)(millis() - lastCmdMs) : -1L;
 
 
   if (
-    !readIMU(
-      imu
-    )
+    imuOk
   ) {
-    Serial.println(
-      "IMU_ERROR"
+    snprintf(
+      buffer,
+      sizeof(buffer),
+
+      "A:%.2f,%.2f,%.2f;"
+      "G:%.1f,%.1f,%.1f;"
+      "yaw:%.1f;gzc:%.2f;st:%d;age:%ld;"
+      "mc:%d;md:%d;me:%d;mf:%d;bias:%.2f",
+
+      lastImu.ax,
+      lastImu.ay,
+      lastImu.az,
+
+      lastImu.gx,
+      lastImu.gy,
+      lastImu.gz,
+
+      yawDeg,
+      gzDps,
+      st,
+      age,
+
+      (int)motorCValue,
+      (int)motorDValue,
+      (int)lroundf(motorEValue),
+      (int)lroundf(motorFValue),
+      gzBias
     );
-
-
-    if (
-      telemetryCharacteristic != nullptr
-    ) {
-      telemetryCharacteristic
-        ->setValue(
-          "IMU_ERROR"
-        );
-
-
-      if (
-        deviceConnected
-      ) {
-        telemetryCharacteristic
-          ->notify();
-      }
-    }
-
-
-    return;
   }
 
+  else {
+    static unsigned long lastImuErr = 0;
 
-  // ==========================================================
-  // BLE STREAM
-  // ==========================================================
+    if (millis() - lastImuErr > 1000) {
+      lastImuErr = millis();
+      Serial.println("IMU_ERROR");
+    }
 
-  char buffer[140];
+    snprintf(
+      buffer,
+      sizeof(buffer),
 
+      "IMU_ERROR;st:%d;age:%ld;mc:%d;md:%d;me:%d;mf:%d",
 
-  snprintf(
-    buffer,
-    sizeof(buffer),
+      st,
+      age,
 
-    "A:%.3f,%.3f,%.3f;"
-    "G:%.2f,%.2f,%.2f;"
-    "T:%.1f",
-
-    imu.ax,
-    imu.ay,
-    imu.az,
-
-    imu.gx,
-    imu.gy,
-    imu.gz,
-
-    imu.temperature
-  );
+      (int)motorCValue,
+      (int)motorDValue,
+      (int)lroundf(motorEValue),
+      (int)lroundf(motorFValue)
+    );
+  }
 
 
   if (
@@ -1555,6 +2141,18 @@ void setup() {
 
 
   // ==========================================================
+  // MOTOR MAP (flash)
+  // ==========================================================
+
+  prefs.begin(
+    "blimpy",
+    false
+  );
+
+  loadMap();
+
+
+  // ==========================================================
   // BLE
   // ==========================================================
 
@@ -1580,7 +2178,7 @@ void setup() {
   );
 
   Serial.println(
-    "IMU -> BLE at 50 Hz"
+    "IMU -> BLE every 200 ms (heading integrated here at 50 Hz)"
   );
 
   Serial.println();
@@ -1588,6 +2186,18 @@ void setup() {
 
   Serial.println(
     "Commands:"
+  );
+
+  Serial.println(
+    "CMD 20 0 0 0            flight setpoints vf vs yr vz (percent), motors off 500 ms after the last one"
+  );
+
+  Serial.println(
+    "MAP LC+ RD+ SE+ VF+ G+  which letter is L/R/S/V (+ sign), G = gyro sign; saved"
+  );
+
+  Serial.println(
+    "STATUS"
   );
 
   Serial.println(
@@ -1629,6 +2239,10 @@ void setup() {
 // ============================================================
 
 void loop() {
+  unsigned long now =
+    millis();
+
+
   // ==========================================================
   // SERIAL COMMANDS
   // ==========================================================
@@ -1649,12 +2263,68 @@ void loop() {
 
 
   // ==========================================================
-  // IMU TELEMETRY @ 50 Hz
+  // BLE COMMANDS (queued by the Bluetooth task)
   // ==========================================================
 
-  unsigned long now =
-    millis();
+  drainCommandQueue();
 
+
+  // ==========================================================
+  // LINK LOST -> motors off, mixer off
+  // ==========================================================
+
+  if (
+    linkLost
+  ) {
+    linkLost = false;
+
+    mixerOff("BLE disconnected");
+
+    Serial.println(
+      "BLE disconnected -> ALL MOTORS OFF"
+    );
+
+    lastAdvertise = 0;      // advertise again right away
+  }
+
+
+  // ==========================================================
+  // ADVERTISING: re-asserted from here while nobody is
+  // connected (harmless when it is already running)
+  // ==========================================================
+
+  if (
+    !deviceConnected &&
+    now - lastAdvertise >= ADVERTISE_EVERY_MS
+  ) {
+    lastAdvertise = now;
+
+    BLEDevice::startAdvertising();
+  }
+
+
+  // ==========================================================
+  // CONTROL TICK @ 50 Hz: gyro, heading, mixer, motors
+  // ==========================================================
+
+  if (
+    now -
+      lastControl >=
+    CONTROL_INTERVAL_MS
+  ) {
+    lastControl =
+      now;
+
+
+    controlTick(
+      now
+    );
+  }
+
+
+  // ==========================================================
+  // TELEMETRY @ 5 Hz
+  // ==========================================================
 
   if (
     now -

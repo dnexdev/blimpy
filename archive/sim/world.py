@@ -1,13 +1,13 @@
 """Simulated world for Blimpy: balloon physics, wind, a person, walls/obstacles and SENSOR models
 (vision latency + noise + dropouts, telemetry/command latency + loss, gyro bias). No sockets, no wall clock:
-`fake_esp32.py` drives it in real time over UDP, `tools/scenarios.py` drives it headless, faster than real time.
+`fake_esp32.py` drives it in real time over UDP, `archive/tools/scenarios.py` drives it headless, faster than real time.
 
 The vehicle numbers (diameter, thrust, gondola mass, motor spacing, ToF offset) live in laptop/config.py PHYS, shared
 with the estimator; `Balloon` reads them. Sensor/disturbance numbers are in REAL (IDEAL turns them all off).
 """
 import math, random
-from .. import config
-from ..control.protocol import FAILSAFE_MS, YR_MAX, clamp, mix, wrap
+from laptop import config
+from laptop.control.protocol import FAILSAFE_MS, YR_MAX, clamp, mix, wrap
 
 MIX_DT = 0.02        # firmware mixer tick (50 Hz)
 PHYS_DT = 0.01       # physics sub-step
@@ -26,12 +26,14 @@ REAL = dict(
     # VL53L0X on the gondola looking down: 2 cm noise, occasional timeout (-1), a false short reading now and then.
     # tof=False here on purpose (and the 2026-09-19 box has no ultrasonic; ble_gondola --fake --tof adds one); the suite keeps it off so
     # seeded runs stay bit-identical to before (the V motor's tilt term leaks a little thrust into xy, and that is enough
-    # to flip seed-marginal detours: python tools/scenarios.py --tof shows which). ToF scenarios pass tof=True.
+    # to flip seed-marginal detours: python archive/tools/scenarios.py --tof shows which). ToF scenarios pass tof=True.
     tof=False, tof_noise=0.02, tof_drop_p=0.03, tof_false_p=0.003, tof_max=2.0, tof_bias=0.0,
     # room: HVAC gusts (Ornstein-Uhlenbeck), lift changing as the room warms / helium leaks
     gust_rms=0.06, gust_tau=4.0, lift_drift_n=0.006, lift_drift_period=240.0,
-    # hardware imperfections: motor-to-motor thrust spread, prop spin-up, S motor not exactly through the centre
-    motor_gain=(1.0, 0.92, 1.05, 0.96), motor_tau=0.06, s_yaw_arm=0.03,
+    # hardware imperfections: motor-to-motor thrust spread, prop spin-up, S motor not exactly through the centre, and the
+    # SHARED motor supply (seen 2026-09-20: switching on more motors slows the others): the voltage at the motors drops by
+    # supply_sag per unit of total duty, thrust goes with the square of it (all four at 0.4 -> -24 % volts, -42 % thrust)
+    motor_gain=(1.0, 0.92, 1.05, 0.96), motor_tau=0.06, s_yaw_arm=0.03, supply_sag=0.15,
     # the eye on the balloon (laptop/vision/fpv.py): YOLO on the gondola camera's stream, 10 Hz, ~250 ms behind; range from
     # the person's height in the frame (~8 %), unknown (box cut) closer than fpv_cut_m. fpv=False here so the older scenarios
     # stay bit-identical; the eye scenarios and the BLE bridge's simulated robot turn it on.
@@ -42,7 +44,7 @@ REAL = dict(
 IDEAL = dict(REAL, vision_latency=0.0, vision_jitter=0.0, balloon_noise=0.0, z_noise=0.0, person_noise=0.0,
              person_drop_p=0.0, balloon_drop_p=0.0, person_outlier_p=0.0, telem_latency=0.0, telem_loss=0.0,
              cmd_latency=0.0, cmd_loss=0.0, gyro_bias=0.0, gyro_noise=0.0, tof_noise=0.0, tof_drop_p=0.0, tof_false_p=0.0, gust_rms=0.0, lift_drift_n=0.0,
-             motor_gain=(1.0, 1.0, 1.0, 1.0), motor_tau=0.0, s_yaw_arm=0.0,
+             motor_gain=(1.0, 1.0, 1.0, 1.0), motor_tau=0.0, s_yaw_arm=0.0, supply_sag=0.0,
              fpv_latency=0.0, fpv_bearing_noise=0.0, fpv_range_noise=0.0, fpv_drop_p=0.0)
 
 
@@ -76,15 +78,16 @@ class Balloon:
     FREE_LIFT_N = -0.010            # -1 gf (slightly heavy)
     G = 9.81
 
-    def __init__(self, x=0.0, y=0.0, z=1.5, psi=0.8, motor_gain=(1, 1, 1, 1), motor_tau=0.0, s_yaw_arm=0.0):
+    def __init__(self, x=0.0, y=0.0, z=1.5, psi=0.8, motor_gain=(1, 1, 1, 1), motor_tau=0.0, s_yaw_arm=0.0, supply_sag=0.0):
         V = math.pi / 6 * self.D ** 3
         self.m = self.M_SKIN + self.M_GONDOLA + self.RHO_HE * V + 0.5 * self.RHO * V   # ~0.83 kg
         self.k = 0.5 * self.RHO * self.CD * math.pi / 4 * self.D ** 2                  # ~0.27 N s^2/m^2
         self.x, self.y, self.z, self.psi = x, y, z, psi
         self.vx = self.vy = self.vz = self.w = 0.0
-        self.gain, self.tau, self.s_yaw_arm = motor_gain, motor_tau, s_yaw_arm
+        self.gain, self.tau, self.s_yaw_arm, self.sag = motor_gain, motor_tau, s_yaw_arm, supply_sag
         self.duty = [0.0, 0.0, 0.0, 0.0]        # actual (spun-up) duties
         self.tilt = 0.0
+        self.volts = 1.0                        # supply at the motors, fraction of nominal (the shared-battery sag)
 
     DUTY_START = 0.06               # coreless motor + DRV8833 do not turn below this duty
 
@@ -103,7 +106,9 @@ class Balloon:
         a = 1.0 if self.tau <= 0 else min(1.0, dt / self.tau)
         for i in range(4):
             self.duty[i] += (cmd[i] - self.duty[i]) * a
-        TL, TR, TS, TV = (self.thrust(d) * g for d, g in zip(self.duty, self.gain))
+        # shared supply: every running motor pulls the voltage down for all of them (thrust ~ (volts x duty)^2)
+        self.volts = max(0.3, 1.0 - self.sag * sum(abs(d) for d in self.duty))
+        TL, TR, TS, TV = (self.thrust(d * self.volts) * g for d, g in zip(self.duty, self.gain))
         c, s = math.cos(self.psi), math.sin(self.psi)
         # horizontal thrust in the world frame (body +y = left = (-s, c))
         hx = (TL + TR) * c - TS * s
@@ -239,7 +244,7 @@ class World:
         self.t = 0.0; self.acc = 0.0
         self.arena = arena
         self.obstacles = list(config.OBSTACLES if obstacles is None else obstacles)
-        self.b = Balloon(*start, psi0, self.r["motor_gain"], self.r["motor_tau"], self.r["s_yaw_arm"])
+        self.b = Balloon(*start, psi0, self.r["motor_gain"], self.r["motor_tau"], self.r["s_yaw_arm"], self.r.get("supply_sag", 0.0))
         self.wind = Wind(wind, self.r["gust_rms"], self.r["gust_tau"], self.rng)
         self.wind_now = tuple(wind)
         self.person = Person(person, self.rng, person_arena or arena, person_speed)   # person_arena: keep the walk off the walls

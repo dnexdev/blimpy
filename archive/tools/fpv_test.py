@@ -1,18 +1,18 @@
 """Offline test of the eye on the balloon (no camera, no YOLO, ~1 s): the pixel -> bearing / range geometry in
 laptop/vision/fpv.py, the simulator's eye model against ground truth, the estimator's relative mode and direct heading
-fix, and the sign of the FOLLOW-on-the-eye law. The closed-loop behaviour is in tools/scenarios.py (names with "eye").
+fix, and the sign of the FOLLOW-on-the-eye law. The closed-loop behaviour is in archive/tools/scenarios.py (names with "eye").
 
-  python tools/fpv_test.py
-  python tools/scenarios.py eye
+  python archive/tools/fpv_test.py
+  python archive/tools/scenarios.py eye
 """
 import math, os, pathlib, sys
-ROOT = pathlib.Path(__file__).resolve().parents[1]
+ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT)); os.chdir(ROOT)
 from laptop import config
 from laptop.control.behaviors import Behaviors
 from laptop.control.estimator import StateEstimator
 from laptop.control.protocol import wrap
-from laptop.sim.world import IDEAL, World
+from archive.sim.world import IDEAL, World
 from laptop.vision.fpv import observe, pick_person
 
 results = {}

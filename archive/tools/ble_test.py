@@ -1,19 +1,23 @@
 """Offline test of the BLE bridge (laptop/control/ble_gondola.py) on the simulated robot. No Bluetooth, no hardware, ~12 s.
 
-  python tools/ble_test.py
+  python archive/tools/ble_test.py
 
 Checks: IMU line parsing in every layout; the udp command -> mixer -> "MOTORS c d e f" path (values, signs, the 50 % cap,
 the 20 Hz rate); telemetry back on 5006 with the heading from the IMU and the correct sign; failsafe STOP within 500 ms
 of the last command and on arm 0; imu_store latest/history and the localhost HTTP endpoints; recovery after a link drop.
 """
 import json, os, pathlib, sys, threading, time, urllib.request
-ROOT = pathlib.Path(__file__).resolve().parents[1]
+ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT)); os.chdir(ROOT)
 from laptop import config
 from laptop.control import imu_store
 from laptop.control.ble_gondola import Bridge, SimTransport, to_pct
 from laptop.control.protocol import CMD_PORT, TELEM_PORT, UdpJson, make_cmd
-from laptop.sim.world import IDEAL, World
+from archive.sim.world import IDEAL, World
+
+# The checks below are written in letters for the identity map (L=C, R=D, S=E, V=F, all +). The real box's map lives in
+# calib/motor_map.json and would make them meaningless here; the bridge's own mapping is covered by tools/bridge_test.py.
+config.BLE["MOTORS"], config.BLE["SIGN"], config.BLE["GYRO_SIGN"] = {"L": "C", "R": "D", "S": "E", "V": "F"}, {"L": 1, "R": 1, "S": 1, "V": 1}, 1
 
 HTTP = 5018
 LOCAL = ("127.0.0.1", CMD_PORT)

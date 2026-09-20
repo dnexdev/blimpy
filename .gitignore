@@ -20,6 +20,8 @@ calib/*
 !calib/laptop_intrinsics.npz
 !calib/mat.json
 !calib/MEASUREMENTS.md
+# which firmware letter is which motor (tools/motor_map.py): one box, every laptop needs it
+!calib/motor_map.json
 
 .env
 .env.*
