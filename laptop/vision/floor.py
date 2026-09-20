@@ -292,6 +292,43 @@ class DriftGuard:
         self.n_bad = 0
 
 
+def refit_nominal(cam, calib_dir, stream, tag_size, layout=None, log=print, frames=12, max_spread=0.05, min_change=0.08):
+    """A camera with NO checkerboard calibration (intrinsics rms = -1: a nominal pinhole) gets its focal length from the mat
+    itself: the four pages are the same print, so only the right f gives them the same size (fit_f). Median over a few
+    frames; kept only when the pages agree within max_spread AND the fit differs from the nominal f by more than
+    min_change (the fit itself wanders ~3 %: inside that it is no better than what is there). Every metre mono reports
+    scales with f, so a webcam that was never calibrated (a MacBook standing in for the demo laptop) ends up a few
+    percent off instead of 10-20."""
+    try:
+        with np.load(os.path.join(calib_dir, f"{cam.name}_intrinsics.npz")) as z:
+            if float(z["rms"]) >= 0: return cam
+    except Exception:
+        return cam
+    layout = get_layout() if layout is None else layout
+    det, fits, seen = make_tag_detector(), [], None
+    t_end = time.monotonic() + 2.0
+    while len(fits) < frames and time.monotonic() < t_end:
+        frame, t = stream.latest()
+        if frame is None or t == seen: time.sleep(0.02); continue
+        seen = t
+        ids, corners = detect(det, frame, layout)
+        if len(ids) >= 3 and 0 in ids:
+            try: fits.append(fit_f(cam, ids, corners, tag_size))
+            except Exception: pass
+    good = [f for f in fits if f[1] <= max_spread]
+    if len(good) < 3:
+        log(f"[auto-calib] nominal intrinsics (no checkerboard calibration for {cam.name!r}) and the mat gave no usable focal-length fit "
+            f"({len(good)} of {len(fits)} frames): distances stay approximate (fx {cam.K[0, 0]:.0f})")
+        return cam
+    fpx = float(np.median([f[0] for f in good]))
+    if abs(fpx - cam.K[0, 0]) / cam.K[0, 0] <= min_change:
+        log(f"[auto-calib] nominal intrinsics for {cam.name!r}: the mat agrees with fx {cam.K[0, 0]:.0f} (fit {fpx:.0f} px), kept")
+        return cam
+    log(f"[auto-calib] no checkerboard calibration for {cam.name!r}: focal length fitted from the mat, fx {cam.K[0, 0]:.0f} -> {fpx:.0f} px "
+        f"(page sizes agree within {100 * float(np.median([f[1] for f in good])):.1f} %, {len(good)} frames). Still approximate: tools/calib/intrinsics.py --name {cam.name}")
+    return Camera.nominal(cam.name, cam.size, calib_dir, f_px=fpx)
+
+
 def load_camera(name, calib_dir, stream, auto_calib, tag_size=None, layout=None, log=print):
     """Camera with a pose for mono / localize.
     No intrinsics file + auto_calib -> nominal pinhole from the stream's own frame size (saved, WARN).
@@ -306,6 +343,7 @@ def load_camera(name, calib_dir, stream, auto_calib, tag_size=None, layout=None,
             f"Chessboard it when there is time: tools/calib/intrinsics.py --name {name}")
     if auto_calib:
         cam0 = Camera.load(name, calib_dir, need_extrinsics=False)
+        cam0 = refit_nominal(cam0, calib_dir, stream, tag_size, layout, log)
         info = {}
         for attempt in range(3):                    # the lid shakes for a second after Enter: try again before giving up
             cam, info = auto_extrinsics(cam0, stream, tag_size, layout, calib_dir=calib_dir)

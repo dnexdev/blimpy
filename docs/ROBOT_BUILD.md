@@ -176,7 +176,7 @@ Write the weight into `PHYS["M_GONDOLA"]` (kg) and `calib/MEASUREMENTS.md`.
 
 The full procedure, one step at a time with what you should see after each, is `docs/BUILD_STEPS.md` (36 steps in
 three phases: H = the hardware team's motor box, S = everything the software people do meanwhile with no motors, J = the
-join). Since 2026-09-19 late the box is two ESP32-C3 boards and two TB6612 drivers (`firmware/i2c_motor_slave/`).
+join). Since 2026-09-19 late the box is two ESP32-C3 boards and two TB6612 drivers (`firmware/esp32_master.ino` + `firmware/esp32_slave.ino`, see `firmware/README.md`).
 This is the summary, in the old single-track order. Each step is a go / no-go for the next. Commands run from the repo root on the laptop with Bluetooth on. Section 3 of
 the README has the same bench checklist with more detail.
 

@@ -257,13 +257,19 @@ INTENT_TOOL = {
     "parameters": {
         "type": "object",
         "properties": {
-            "intent": {"type": "string", "enum": ["follow_me", "hover", "wander", "go_to", "rotate", "altitude", "timer",
+            "intent": {"type": "string", "enum": ["follow_me", "hover", "wander", "go_to", "nudge", "rotate", "altitude", "timer",
                                                   "pomodoro", "focus_guard", "mood"],
                        "description": "follow_me: follow the speaker. hover: stop and hold. wander: drift around. "
-                                      "go_to: fly to a target. rotate: turn by degrees. altitude: up or down a step. "
+                                      "go_to: fly to a target (a PLACE or the speaker). nudge: move a short step the way Blimpy faces "
+                                      "(\"move forward a bit\", \"back up\", \"a little to the left\"). rotate: turn by degrees. altitude: up or down a step. "
                                       "timer: minutes. pomodoro: work/break cycle. focus_guard: watch the user work. "
                                       "mood: dance/happy/sleepy."},
-            "target": {"type": "string", "enum": ["judges", "home", "me"], "description": "go_to only"},
+            "target": {"type": "string", "enum": ["judges", "home", "me", "person"], "description": "go_to only. person = the one named in `person`"},
+            "person": {"type": "string", "description": "follow_me and go_to: WHO. \"me\" = the speaker (default), \"other\" = the other person "
+                                                         "(\"my friend\", \"him\"), a label from the picture (\"P2\"), or a name that was bound with name_person"},
+            "where": {"type": "string", "enum": ["near", "behind"], "description": "go_to a person: stop next to them (default) or go round behind them"},
+            "move": {"type": "string", "enum": ["forward", "back", "left", "right"], "description": "nudge only: relative to where Blimpy faces"},
+            "metres": {"type": "number", "description": "nudge only: how far; \"a bit\" = 0.5, default 0.5, at most 2"},
             "degrees": {"type": "number", "description": "rotate only: + = counter-clockwise/left, - = clockwise/right; turn around = 180"},
             "direction": {"type": "string", "enum": ["up", "down"], "description": "altitude only"},
             "minutes": {"type": "number", "description": "timer only (ninety seconds = 1.5)"},
@@ -275,6 +281,16 @@ INTENT_TOOL = {
     },
 }
 
+NAME_TOOL = {
+    "type": "function", "name": "name_person",
+    "description": "Remember who a labelled person in the picture is. Call it when someone introduces themselves or another "
+                   "person (\"I'm Raymond\", \"this is Peter\"). Call it alone, not together with set_intent.",
+    "parameters": {"type": "object",
+                   "properties": {"person": {"type": "string", "description": "\"me\" = the speaker, \"other\" = the other person, or a label from the picture (\"P2\")"},
+                                  "name": {"type": "string"}},
+                   "required": ["person", "name"]},
+}
+
 SILENT_TOOL = {
     "type": "function", "name": "stay_silent",
     "description": "Call this, and say NOTHING, when what you heard was not said to you: people talking to each other, "
@@ -282,10 +298,28 @@ SILENT_TOOL = {
     "parameters": {"type": "object", "properties": {}, "required": []},
 }
 
-INSTRUCTIONS = """You are Blimpy, a small friendly helium-balloon robot that floats around a room, follows people and helps them
-focus. You hear the user through a microphone and SEE through a camera (a new frame about once a second): use what you
+_HEAD = """You are Blimpy, a small friendly helium-balloon robot that floats around a room, follows people and helps them
+focus. """
+_EYES_OWN = """You hear the user through a microphone and SEE through a camera (a new frame about once a second): use what you
 see when it matters ("what am I holding", "is my posture okay", "what's on the whiteboard").
-Rules:
+"""
+_EYES_ROOM = """You hear the room through ONE microphone. The pictures you get (about one a second while someone talks) come from
+a FIXED ROOM CAMERA that stands next to that microphone. They are NOT taken from where you are: you are the balloon IN
+the picture, marked BLIMPY when the room camera tracks you. Use the pictures when it matters ("what am I holding",
+"what's on the whiteboard", "who is here").
+Who is who, and where:
+- People in the picture carry a label on their box (P1, P2 ...), with their name once someone has told you it. Refer to
+  people by name or label. When someone says who they or another person are, call name_person.
+- The strip under the picture is measured, trust it over your own impression of the picture: it says where each person is
+  RELATIVE TO YOU (AHEAD, LEFT, BEHIND-RIGHT ... of Blimpy, in metres). Left and right ALWAYS mean your own left and
+  right as given there, never the left or right side of the picture. If the strip says your heading is not known yet,
+  say so instead of guessing a side.
+- The person speaking is often NOT in the picture, or only partly (they stand at the laptop, next to the camera). Never
+  assume that the person you can see is the one talking. "nearest the mic" in the strip is the best guess for the
+  speaker. "My friend", "him", "her", "the other one" = the other labelled person. If you cannot tell who is meant, ask
+  which label.
+"""
+_RULES = """Rules:
 - Any instruction about moving, following, stopping, turning, height, timers, pomodoro, focus guard or mood: call
   set_intent ONCE, then confirm in at most 10 words ("On it, right behind you.").
 - Questions and small talk: answer briefly (max 2 sentences), in character, warm, a little playful. No emojis.
@@ -301,6 +335,16 @@ Rules:
   question to a robot. Remarks between people ("yeah, recording started", "the code is running", "pass me that") are NOT
   for you: call stay_silent and produce no speech at all, not even "okay" or "mm-hm". When in doubt, stay silent.
 - Never invent robot abilities you were not given. You cannot pick things up or leave the room."""
+
+
+def instructions(room=False):
+    """The session prompt. room = the pictures come from the ROOM camera with everybody labelled (pilot --omni-cam room);
+    otherwise the camera is simply Blimpy's view (the eye on the balloon, or a webcam on the desk)."""
+    return _HEAD + (_EYES_ROOM if room else _EYES_OWN) + _RULES
+
+
+INSTRUCTIONS = instructions(room=False)
+
 
 # Safety net, independent of the model: a spoken stop acts the moment its transcription arrives (seen live: spoken over
 # Blimpy talking, "Blimpy, stop and hover." was transcribed right but answered with "Mm-hm." or a resumed story and no
@@ -328,7 +372,7 @@ SESSION = {
     "input_audio_format": os.environ.get("OMNI_AUDIO_FMT", "pcm"),
     "output_audio_format": os.environ.get("OMNI_AUDIO_FMT", "pcm"),
     "turn_detection": {"type": "semantic_vad", "threshold": 0.5, "silence_duration_ms": 600},
-    "tools": [INTENT_TOOL, SILENT_TOOL],
+    "tools": [INTENT_TOOL, NAME_TOOL, SILENT_TOOL],
     "tool_choice": "auto",
 }
 
@@ -394,7 +438,7 @@ class OmniLive:
 
     def __init__(self, on_intent, frame_fn=None, api_key=None, model=None, url=None, session=None, fps=1.0,
                  mic=True, speaker=True, mic_device=None, spk_device=None, half_duplex=True, purpose="demo", bt_keepalive=True,
-                 usage_log=True, debug=False, on_text=None, gate=True, name_gate=True, presence_fn=None, record=False):
+                 usage_log=True, debug=False, on_text=None, gate=True, name_gate=True, presence_fn=None, record=False, scene_fn=None):
         self.on_intent, self.frame_fn, self.fps = on_intent, frame_fn, fps
         self.gate = gate if isinstance(gate, MicGate) else (MicGate(**gate) if isinstance(gate, dict) else (MicGate() if gate else None))
         self.name_gate = (dict(NAME_GATE, **name_gate) if isinstance(name_gate, dict) else (dict(NAME_GATE) if name_gate else None))
@@ -402,12 +446,14 @@ class OmniLive:
         # pcm], "calls": [held tool calls], "since_reply", "asked", "presence", "loudness", "pending": at the judge}. presence_fn() -> True when someone is
         # near and centred in Blimpy's eye (the pilot builds it from the FPV observation); None = that rule is off.
         self.presence_fn = presence_fn
+        self.scene_fn = scene_fn            # () -> dict: who is where right now (laptop/control/scene.py). Logged per turn; must be instant (ws thread)
         # The floor: whose turn it is. From the end of a spoken turn until it is judged, mic packets WAIT here (pending); if
         # the turn was for Blimpy they are dropped and the mic stays shut until its answer (tool calls, follow-up reply,
         # playback) is over. Seen live in a loud hall: a neighbour's next sentence reached the server before Blimpy had
         # answered, the server took it as a barge-in and cancelled the answer. Someone else's turn: the packets go up late,
         # nothing is lost. Press-to-talk passes; --full-duplex (headphones) keeps real barge-in and has no floor.
         self._floor = None; self._floor_t = 0.0; self._floor_buf = []; self._t_resp_done = 0.0
+        self._expect_server = False         # a spoken turn was committed: the next response.created is the server's answer to it
         self.rec = None; self._record = record             # record: True (data/voice_sessions) | a directory | False. Opened in start()
         ng = self.name_gate or NAME_GATE
         self.addr = _adr.Addressee(dict(ng.get("params") or {}, names=tuple(ng["words"])))
@@ -497,6 +543,11 @@ class OmniLive:
 
     def _on_open(self, ws):
         self.connected = True; self.last_error = None
+        # A new socket is a new conversation on the server: nothing we asked for on the old one will ever be answered. A
+        # response.create counted but never answered would make the NEXT server reply look like ours, and ours are never held.
+        self._resp_active = False; self._resp_client = False; self._client_creates = 0; self._after_done.clear()
+        self._expect_server = False; self._floor = None; self._floor_buf = []; self._turn = None
+        self._sys("connected")
         self.send({"type": "session.update", "session": self.session})
 
     def _on_error(self, ws, err): self.last_error = f"{err.__class__.__name__}: {err}"
@@ -541,7 +592,7 @@ class OmniLive:
             self.t_speech_stopped = time.monotonic(); self._ptt_until = 0.0      # a press-to-talk turn ends here
             if self.name_gate and self.half_duplex: self._floor, self._floor_t, self._floor_buf = "pending", time.monotonic(), []
         elif t == "input_audio_buffer.committed":
-            self._audio_since_commit = 0
+            self._audio_since_commit = 0; self._expect_server = time.monotonic()
         elif t in ("response.function_call_arguments.done",):
             self._tool_call(ev.get("call_id"), ev.get("name"), ev.get("arguments"))
         elif t == "response.output_item.done":
@@ -565,10 +616,19 @@ class OmniLive:
             self._log_turn(turn)                          # a turn settled before its words came (timeout, stay_silent) is logged here
         elif t == "response.created":
             self._t_resp = time.monotonic(); self.t_first_audio = 0.0; self._resp_active = True; self._resp_played = False
-            self._resp_client = self._client_creates > 0          # ours (say / tool result), or the server's answer to a spoken turn
-            if self._resp_client: self._client_creates -= 1
+            # Ours (say / tool result: never held) or the server's answer to a spoken turn (held until judged)? Seen live
+            # 2026-09-19: an ignored turn was answered out loud. Our own counter alone cannot tell: a response.create of ours
+            # that raced a spoken turn, or was lost with a dropped socket, made the server's reply look like ours. A spoken
+            # turn that was just committed is answered by the server FIRST, so that wins.
+            if self._expect_server and time.monotonic() - self._expect_server < 3.0: self._resp_client = False; self._expect_server = False
+            else:                                              # (a commit the server never answered expires: a later say() is still ours)
+                self._expect_server = False
+                self._resp_client = self._client_creates > 0
+                if self._resp_client: self._client_creates -= 1
+            self._sys("response.created", kind="ours" if self._resp_client else "server", pending_ours=self._client_creates)
         elif t == "response.done":
             self.stats["responses"] += 1; self._resp_active = False; self._t_resp_done = time.monotonic()
+            self._sys("response.done", status=(ev.get("response") or {}).get("status"), played=self._resp_played, kind="ours" if self._resp_client else "server")
             r = ev.get("response") or {}
             if r.get("status") == "completed" and self._resp_played: self.t_last_reply = time.monotonic()
             if not self._resp_client and r.get("status") == "completed" and self._turn is not None: self._local_intent(self._turn)
@@ -611,7 +671,7 @@ class OmniLive:
             return
         if turn is not None and not self._resp_client:
             with self._tlock:
-                if name == "set_intent": turn["n_calls"] += 1
+                if name in ("set_intent", "name_person"): turn["n_calls"] += 1
                 if turn["verdict"] is None: turn["calls"].append((call_id, name, d)); return      # held until the turn is judged
             if turn["verdict"] is False: return self._call_ignored(call_id)
         self._exec_call(call_id, name, d)
@@ -622,16 +682,23 @@ class OmniLive:
                    "item": {"type": "function_call_output", "call_id": call_id,
                             "output": json.dumps({"result": "ignored: that was not addressed to you. Stay quiet."})}})
 
-    def _exec_call(self, call_id, name, d):
-        if name != "set_intent":
+    def _sys(self, what, **kw):
+        """One line in the session log for what the PROTOCOL did (not what was said): when a reply leaks or goes missing,
+        turns.jsonl shows whose response it was. Rows with who = "sys"; the backtest skips them."""
+        if self.rec: self.rec.event(what, **kw)
+
+    def _exec_call(self, call_id, name, d, respond=True):
+        self._sys("tool", name=name, args=d)
+        if name not in ("set_intent", "name_person"):
             out = f"unknown tool {name}"
         else:
             d = {k: v for k, v in d.items() if v is not None}
+            if name == "name_person": d = dict(d, intent="name_person")
             try: out = self.on_intent(d) or "done"
             except Exception as e: out = f"failed: {e}"
         self.send({"type": "conversation.item.create",
                    "item": {"type": "function_call_output", "call_id": call_id, "output": json.dumps({"result": out})}})
-        self._respond()
+        if respond: self._respond()
 
     def _respond(self):
         """response.create now, or right after the running response finishes (the relay refuses a second one)."""
@@ -680,8 +747,12 @@ class OmniLive:
         self._turn = {"t0": now, "verdict": None if ng else True, "audio": [], "calls": [], "since_reply": since, "asked": self._asked,
                       "presence": presence, "loudness": self.loudness, "timed_out": False, "pending": False, "text": None, "logged": False,
                       "rec_t0": self.rec.now() if self.rec else None, "ctx": None, "dec": None, "judge": None, "n_calls": 0, "local": False,
-                      "people": people, "frames": []}
+                      "people": people, "frames": [], "scene": self._scene()}
         return self._turn
+
+    def _scene(self):
+        try: return self.scene_fn() if self.scene_fn else None
+        except Exception: return None
 
     def _play(self, pcm):
         self._resp_played = True; self.t_last_reply = time.monotonic()
@@ -760,11 +831,12 @@ class OmniLive:
         if ok:
             for pcm in audio: self._play(pcm)
             if said and audio: self._said(said)
-            for c in calls: self._exec_call(*c)
+            for c in calls: self._exec_call(*c, respond=False)
+            if calls: self._respond()
         else:
             self.stats["ignored"] = self.stats.get("ignored", 0) + 1
             for c in calls: self._call_ignored(c[0])
-            if self._resp_active and not self._resp_client: self.send({"type": "response.cancel"})
+            if self._resp_active and not self._resp_client: self.send({"type": "response.cancel"}); self._sys("cancel", why=why)
         return ok
 
     def _local_intent(self, turn):
@@ -776,6 +848,7 @@ class OmniLive:
         with self._tlock:
             txt = turn["text"]
             if turn["local"] or turn["verdict"] is not True or not txt or turn["n_calls"] or is_stop(txt): return
+            if self._asked: return                          # the model asked back ("which one do you mean?"): it chose NOT to act yet
             turn["local"] = True
         try: from .intent import fast_intent
         except Exception: return
@@ -798,7 +871,7 @@ class OmniLive:
             ctx = dataclasses.replace(turn["ctx"] or self._ctx(turn, txt), text=txt); dec = turn["dec"]
             self.rec.turn(ctx, {"t0": turn["rec_t0"], "t1": round(self.rec.now(), 2), "verdict": ok, "why": self.last_verdict,
                                 "score": round(dec.score, 3) if dec else None, "parts": {k: round(v, 3) for k, (v, _) in dec.parts.items()} if dec else None,
-                                "judge": turn["judge"], "policy": self.name_gate["policy"] if self.name_gate else "open",
+                                "judge": turn["judge"], "policy": self.name_gate["policy"] if self.name_gate else "open", "scene": turn.get("scene"),
                                 "frames": self.rec.frames(pick_frames(turn["frames"], max(2, self.addr.P["judge_frames"])))})
         if not ok:
             if txt: self.transcript.append(("ignored", txt)); self._log("ignored", f"{txt}   [{self.last_verdict}]")
@@ -871,7 +944,7 @@ class OmniLive:
         # Verified live: the relay refuses an image until audio has been appended to the CURRENT input buffer ("Error
         # append image before append audio"; a commit opens a fresh buffer), so frames wait for the next mic packet.
         # With a gate, frames only go while someone is talking: that is the only moment the model looks at them.
-        if frame is None or not self.ok or self._audio_since_commit == 0 or (self.gate and not self.gate.open): return False
+        if frame is None or not self.ok or self._audio_since_commit == 0 or (self.gate and not self.gate.open and not self.ptt): return False
         jpg = encode_jpeg(frame)
         if self.send({"type": "input_image_buffer.append", "image": jpg}):
             self.stats["img_out"] += 1; self._t_frame = time.monotonic()
@@ -883,8 +956,8 @@ class OmniLive:
     def _frame_loop(self):
         period = 1.0 / max(0.1, self.fps)
         while not self.stopping:
-            if time.monotonic() - self._t_frame >= period:
-                try: self.send_frame(self.frame_fn())
+            if time.monotonic() - self._t_frame >= period and self.ok and self._audio_since_commit and not (self.gate and not self.gate.open and not self.ptt):
+                try: self.send_frame(self.frame_fn())               # frame_fn may fetch and annotate (pilot --omni-cam room): only when it can go up
                 except Exception as e: self.last_error = f"frame: {e}"
             time.sleep(0.05)
 

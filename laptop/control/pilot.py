@@ -82,6 +82,55 @@ def main():
     if mode == "local": load_local()
     elif mode == "omni": threading.Thread(target=load_local, daemon=True).start()   # standby loads while the cloud talks
 
+    from .scene import Scene
+    t_switch = 0                         # now_ms() of the last change of the person Blimpy acts on
+    scene, room = Scene(), None          # who is where (room camera's roster + names bound by voice); room = RoomEyes when --omni-cam room
+
+    def psi_ok(): return est.psi is not None and bool(getattr(est, "head_confident", False)) and not est.rel
+
+    def balloon_now():
+        """The balloon's position if the room camera has seen it recently, else None: a marker or a distance built on a
+        position from a minute ago would be presented to the model as the present."""
+        return est.p if est.p is not None and now_ms() - t_balloon <= G["BALLOON_LOST_MS"] else None
+
+    def people_intent(it):
+        """Commands that name a PERSON (follow P2, go behind Raymond, "this is Peter"), resolved against the room camera's
+        roster BEFORE behaviors sees them. -> a sentence for the model to say, or None = not mine, behaviors handles it.
+        Changes `it` in place so that behaviors acts on the chosen person (it only ever knows one). Nothing is switched
+        (target, mono's single-person message, the person track) until every check has passed: a refused command
+        leaves Blimpy acting on whoever it was acting on."""
+        nonlocal t_switch
+        k = it.get("intent")
+        if k == "name_person":
+            if room is None: return "I can't tell people apart without my room camera."
+            label, why = scene.resolve(it.get("person"))
+            if label is None: return why
+            if not scene.bind(label, it.get("name", "")): return "I couldn't catch that name. Say it again?"
+            log.event("name_person", label=label, name=scene.names.get(label))
+            return f"Got it: {label} is {scene.names[label]}."
+        if room is None: return None
+        if k == "follow_me": who = it.get("person") or "me"
+        elif k == "go_to" and it.get("target", "me") in ("me", "person"): who = it.get("person") or "me"
+        else: return None                                  # home, judges, nudge, rotate ...: a stray `person` field changes nothing
+        label, why = scene.resolve(who)
+        if label is None: return why
+        p = scene.get(label); xy = None
+        if k == "go_to" and it.get("where") == "behind":
+            xy = scene.behind_point(label, balloon_now(), arena=beh.arena, margin=config.R_BALLOON + 0.3)
+            if xy is None:
+                return (f"I can see {scene.title(label)}, but I can't get behind them: either I don't know exactly where they stand "
+                        "(their feet must be in my room camera's picture) or there is no room behind them.")
+        elif p is None or p.get("q") != "feet":
+            return (f"I can see {scene.title(label)}, but their feet are out of my room camera's picture, so I don't know where they stand. "
+                    "Ask them to step back a little.")
+        if label != scene.target:
+            scene.target = label; room.target = label; beh.reset_person(); t_switch = now_ms()
+        log.event("person_target", label=label, who=who)
+        if xy is not None: it["target"], it["_xy"] = "point", xy
+        elif k == "go_to": it["target"] = "me"
+        it["_who"] = scene.title(label)
+        return None
+
     def omni_intent(it):
         """Cloud tool call (websocket thread) -> main loop -> behaviors; waits briefly for what behaviors said."""
         done, box = threading.Event(), {}
@@ -90,15 +139,36 @@ def main():
 
     if mode == "omni":
         from ..voice.omni import OmniLive
+        from ..voice import omni as omni_mod
         from ..voice.omni_watch import FocusWatcher
         spec = args.omni_cam or ("eye" if eye is not None else config.OMNI["CAMERA"])
-        frame_fn = None
+        frame_fn = raw_fn = None
         if spec == "eye": frame_fn = eye.frame                  # Blimpy sees through its own eye (one stream client only)
+        elif str(spec).lower() == "room":
+            # The room camera's process (mono.py) owns the webcam and serves its picture + everybody in it; the marks
+            # (labels, names, BLIMPY, the strip that says where people are RELATIVE TO BLIMPY) are drawn HERE, where the
+            # names and the balloon's pose live. Also the only way to have eyes on Windows while mono runs (one process
+            # per webcam).
+            from ..vision.eyes import RoomEyes
+            room = RoomEyes(hz=config.PEOPLE["ROOM_POLL_HZ"]); room.start()
+            print("[pilot] eyes = the room camera (mono.py). Waiting for its picture ...")
+            if not room.wait_first(30):
+                print("[pilot] WARNING: no picture from the room camera (is  python -m laptop.vision.mono --auto-calib  running?). "
+                      "Blimpy is BLIND until it answers; --omni-cam 0 / 1 / none are the other choices")
+            marked = {"t": None, "img": None}
+            def raw_fn(): return room.latest()[0]
+            def frame_fn():
+                img, meta = room.latest()
+                if img is None: return None
+                if meta.get("t") != marked["t"]:              # annotate once per picture, however often it is asked for
+                    marked["t"], marked["img"] = meta.get("t"), scene.annotate(img, balloon_now(), est.psi, psi_ok(), meta=meta)
+                return marked["img"]
         elif spec and str(spec).lower() != "none":
             from ..vision.streams import Stream
             try: cam = Stream(spec, "eyes").wait_first(5)
             except Exception as e: print(f"[pilot] no eyes ({e}); omni runs ears-only")
             frame_fn = (lambda: cam.latest()[0]) if cam else None
+        if raw_fn is None: raw_fn = frame_fn
         O = config.OMNI
         gate = dict(open_db=O["GATE_DB"], min_dbfs=O["GATE_MIN_DBFS"], preroll_ms=O["GATE_PREROLL_MS"], hangover_ms=O["GATE_HANGOVER_MS"],
                     warmup_s=O["GATE_LISTEN_S"], on_ready=lambda g: print(f"\n[pilot] {g.verdict()}")) if O["GATE"] else False
@@ -111,18 +181,21 @@ def main():
                 """Someone near and centred in Blimpy's eye (the FPV observation the behaviors already hold): in a quiet
                 room a command said to its face needs no name. No eye, or nobody in it = False."""
                 f = beh.fpv if beh.fpv_ok() else None
-                if f is None: return 0
+                if f is None:                                        # no eye on the balloon: the room camera's people near the balloon, or UNKNOWN
+                    return scene.near(balloon_now(), O["PRESENCE_RANGE_M"]) if room is not None else None   # (never a made-up "nobody": the judge is told what we say)
                 if "facing" in f: return f["facing"]                 # how many people are near and centred (several = nobody in particular)
                 return int(abs(f["bearing"]) < O["PRESENCE_BEARING_RAD"] and (f.get("range") is None or f["range"] < O["PRESENCE_RANGE_M"]))
             omni = OmniLive(on_intent=omni_intent, frame_fn=frame_fn, fps=O["FPS"], half_duplex=O["HALF_DUPLEX"], purpose="pilot", gate=gate,
-                            mic_device=args.mic, spk_device=args.spk, name_gate=name_gate, presence_fn=facing, record=O["RECORD"]).start()   # devices: index or name fragment
+                            mic_device=args.mic, spk_device=args.spk, name_gate=name_gate, presence_fn=facing, record=O["RECORD"],
+                            scene_fn=(lambda: scene.snapshot(balloon_now(), est.psi, psi_ok())) if room is not None else None,
+                            session={"instructions": omni_mod.instructions(room=room is not None)}).start()   # devices: index or name fragment
             print(f"[pilot] addressing {'%s (%s room): cues + room thresholds + judge %s (voice/addressee.py); a stop word or a p turn always counts; team chatter makes no sound' % (O['ADDRESS'], O['ADDRESS_MODE'], O['JUDGE']) if name_gate else 'off: everything is answered'}")
             if args.mic is not None or args.spk is not None:
                 import sounddevice as sd
                 print(f"[pilot] cloud mic: {sd.query_devices(omni.mic_device, 'input')['name'][:50]}   voice out: {sd.query_devices(omni.spk_device, 'output')['name'][:50]}")
             print(f"[pilot] OMNI live: {omni.model} ({'eyes (' + spec + ') + ears' if frame_fn else 'ears only'}); "
                   f"mic gate {'on: listening to the room for %.0f s first, then it streams only while someone talks' % O['GATE_LISTEN_S'] if gate else 'OFF: 0.77 units per minute'}.")
-            if frame_fn: watcher = FocusWatcher(frame_fn, on_report=reports.append, interval=O["WATCH_S"])
+            if raw_fn: watcher = FocusWatcher(raw_fn, on_report=reports.append, interval=O["WATCH_S"])       # the desk watcher gets the picture WITHOUT the marks
             try:
                 from ..voice.usage_log import relay_balance
                 b = relay_balance(omni.key); print(f"[pilot] key ...{omni.key[-4:]}: {b['spent']:.2f} of {b['limit']} units used ({b['pct']:.1f} %)")
@@ -173,7 +246,7 @@ def main():
             for s, _ in state_in.recv_all():                  # every row: eye rows are interleaved with the vision rows
                 log.state(s)
                 if s.get("balloon"): est.update_balloon(s["balloon"], s.get("t", now)); t_balloon = now
-                if s.get("person"): beh.on_person(s["person"], s.get("t"))
+                if s.get("person") and now - t_switch > 600: beh.on_person(s["person"], s.get("t"))   # rows of the PREVIOUS person are still in flight right after a switch
                 if s.get("fpv"): beh.on_fpv(s["fpv"], s.get("t"))          # the eye from the sim or a standalone fpv.py
             if eye is not None:
                 obs, t_obs = eye.latest()
@@ -198,12 +271,19 @@ def main():
                     keys.close(); run_text(input("\ncommand> ")); keys.__init__()
                 elif k == ESC: raise KeyboardInterrupt
 
+            if room is not None:
+                scene.update(room.latest()[1])
+                room.target = scene.target
             while reports: beh.on_focus_report(reports.pop(0))
             if watcher is not None: watcher.enabled = beh.focus      # only look at the desk while the focus guard is on
             while pending:
                 it = pending.pop(0)
                 log.event("intent", said=it.get("_text"), **{k: v for k, v in it.items() if not k.startswith("_") and k != "text"})
-                reply = beh.handle(it, est)
+                reply = people_intent(it)
+                if reply is None:
+                    reply = beh.handle(it, est)
+                    if it.get("_who") and it.get("_done") and len(scene.people) > 1:   # several people: the MODEL is told whom Blimpy took, so a wrong
+                        reply = f"{reply or 'done'} (acting on {it['_who']}; say so)"    # guess gets corrected out loud (cloud calls only: a typed reply is spoken verbatim)
                 if it.get("_done"):                                   # cloud tool call: the model speaks the result itself
                     done, box = it["_done"]; box["reply"] = reply or "done"; done.set()
                     print(f"\n[pilot] omni set_intent {({k: v for k, v in it.items() if not k.startswith('_')})} -> mode {beh.mode}, {box['reply']!r}")

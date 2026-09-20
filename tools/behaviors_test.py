@@ -79,6 +79,12 @@ checks = {
     "danced": results.get("dance_mode") == "DANCE",
     "ended in HOVER": results.get("final_mode") == "HOVER",
 }
+# nudge: "move forward a bit" is a short step the way Blimpy faces, then a hold there (seen live: the model sent go_to target "forward")
+class _E: p = [1.0, 2.0, 1.5]; psi = math.pi / 2; rel = False; head_confident = True
+_b = Behaviors(lambda s: None); _b.handle({"intent": "nudge", "move": "forward", "metres": 0.5}, _E())
+checks["nudge forward = 0.5 m the way it faces, then hold"] = _b.mode == "HOVER" and abs(_b.hold_xy[0] - 1.0) < 1e-6 and abs(_b.hold_xy[1] - 2.5) < 1e-6
+_b.handle({"intent": "go_to", "target": "forward"}, _E())
+checks["go_to with a direction as target is a nudge, an unknown place is refused"] = abs(_b.hold_xy[1] - 2.5) < 1e-6 and "don't know that place" in _b.handle({"intent": "go_to", "target": "kitchen"}, _E())
 for k, v in checks.items(): print(f"  {'OK  ' if v else 'FAIL'} {k}")
 print("PASS" if all(checks.values()) else "FAIL")
 sys.exit(0 if all(checks.values()) else 1)

@@ -20,6 +20,11 @@ Python; there is no venv to activate). On any other machine make a venv first: R
 
 The design behind these steps (what the software assumes and why) is in `docs/ROBOT_BUILD.md`.
 
+> **Update 2026-09-19 late.** The hardware team finished the box with their OWN sketches: `firmware/esp32_master.ino` +
+> `firmware/esp32_slave.ino` (see `firmware/README.md`). The folder `firmware/i2c_motor_slave/` that Phase H below refers
+> to was removed with that change (git history before `de42b4c`): read those Phase H references as history. The handoff
+> test (H5-H7) is unchanged: it only talks to the box over Bluetooth.
+
 ## Rules while building
 
 1. Whenever a motor runs on the bench, the gondola is taped or clamped to the table and hands, hair and cables are clear of the props.

@@ -8,7 +8,12 @@ from .positioning import venue as _venue   # stdlib-only, ~1 ms; resolves venues
 # webcams: "0", "1"    phones (DroidCam): "http://192.168.137.21:4747/video"
 # Raspberry Pi (rpicam-vid H.264 over UDP): "udp://@:5000" (A) and "udp://@:5001" (B)
 SOURCES = {"A": "0", "B": "http://192.168.137.25:4747/video"}   # A: the laptop webcam (1280x720) = the ROOM camera. B: a phone running DroidCam on the laptop hotspot (tools/find_phone.py), optional second camera
-CALIB_NAMES = {"A": "laptop", "B": "B"}   # which calib/<name>_*.npz each role uses (localize --names); calib/laptop_intrinsics.npz is committed (one device, calibrated once)
+CALIB_NAMES = {"A": os.environ.get("BLIMPY_CALIB_A", "laptop"), "B": "B"}   # which calib/<name>_*.npz each role uses (localize --names); calib/laptop_intrinsics.npz
+                                          # is committed (the Windows demo laptop's webcam, calibrated once). Another machine's webcam needs its own file:
+                                          # BLIMPY_CALIB_A=macbook in .env (calib/macbook_intrinsics.npz: tools/calib/intrinsics.py --name macbook, or a nominal
+                                          # one fitted from the mat), so every tool on that machine uses it without a flag
+VISION_DEVICE = os.environ.get("BLIMPY_DEVICE") or None   # ultralytics device for the detectors: None = auto (CUDA when there is one, else CPU). A Mac needs
+                                          # BLIMPY_DEVICE=mps in .env: measured 2026-09-19 on a MacBook Air, mono ran 4 Hz on the CPU and 14-19 Hz on mps
 ROTATE = {"A": 0, "B": 90}              # degrees clockwise applied to each stream (phone held in portrait -> 90); calibrate at the rotated size
 
 # --- OMNI Live (Huawei track): cloud ears/eyes/mouth via Qwen3.5-Omni on the yibuapi relay (laptop/voice/omni.py) ---
@@ -50,6 +55,32 @@ OMNI = dict(
     GATE_DB_LOUD=None,       # GATE_DB while the room is loud; None = unchanged. Take it from `omni --calibrate` on the floor.
     VERDICT_TIMEOUT_S=1.5,   # replies are held until the turn's transcript is judged; this long without one = judged without it
     PRESENCE_BEARING_RAD=0.35, PRESENCE_RANGE_M=3.0,   # "said to its face": someone this centred and this near in the FPV eye
+)
+
+# --- Everybody in the room camera's view (laptop/vision/people.py): labels P1, P2 ... that survive occlusion, leaving and
+#     coming back, and tracker-id swaps. First values 2026-09-19, from the recorded two-person session; nothing here is
+#     tuned to a test. ---
+PEOPLE = dict(
+    EDGE_FRAC=0.02,        # a box ending within this fraction of the frame edge counts as cut there (its real end is out of view)
+    ASSUMED_H_M=1.70,      # m, standing height used ONLY when the feet are out of the picture (position flagged q="head")
+    SIG_MAX=0.35,          # Bhattacharyya distance of torso colour histograms below which two sightings may be one person
+    AMBIG_MARGIN=0.08,     # a re-attachment that does not beat the next candidate by this is flagged amb (the name on it is dropped)
+    GALLERY=4, GALLERY_NEW=0.2,   # signatures remembered per person; a view this far from all of them is a new one (their back)
+    SIG_EMA=0.05,          # how fast a signature follows the light (updated only on clean, uncut, unoccluded boxes)
+    GATE_M=0.8, V_MAX=2.0, # re-attach only within GATE_M + V_MAX * gap metres of where the person was (when both are known)
+    POS_GATE_S=3.0,        # ... and only for gaps shorter than this; after that the position says nothing
+    TID_TRUST_S=1.0,       # a tracker id seen this recently is trusted (its motion model vouches for it) ...
+    TID_BONUS=0.3,         # ... by this much against the signature: a clear colour contradiction still overrules it (swap)
+    MIN_HITS=3,            # frames before a new person is published (a one-frame ghost never gets a label)
+    GHOST_S=1.0,           # s after which a box that never reached MIN_HITS is forgotten (it must not rival real people for 2 minutes)
+    HEAD_RAY_MIN=0.15,     # feet-cut tier: the head ray must climb or drop at least this much per metre, else no metres (ill-conditioned)
+    HEAD_RANGE_MAX_M=6.0,  # ... and a head-tier position further than this from the camera is not believed
+    FORGET_S=120.0,        # s out of view before a person (and the name bound to the label) is forgotten; labels are never reused
+    PRIMARY_HOLD_S=2.5,    # s the single-person message waits for "the person" to come back before it moves to someone else
+    MAX_PUBLISHED=6,       # people per message (udp datagram budget, protocol.UdpJson reads 2048 bytes)
+    BEHIND_M=1.5,          # m, "go behind <person>": the goal is this far beyond them on the line from Blimpy. Below ~1.4 the
+                           # balloon's own radius + the avoidance margin make the goal unreachable (follow_me.avoid)
+    ROOM_POLL_HZ=3.0,      # how often the pilot fetches mono's picture + people (laptop/vision/eyes.py); the model gets 1 frame/s
 )
 
 # --- Eye on the balloon (laptop/vision/fpv.py): the Arduino/ESP32 camera on the gondola streams over the hotspot. It is

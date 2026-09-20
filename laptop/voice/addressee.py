@@ -155,9 +155,19 @@ class EngagedCue(Cue):
         return math.exp(-min(ages) / lerp(P["engaged_tau_s"], ctx.loudness)), f"in conversation ({min(ages):.0f} s)"
 
 
+PERSONAL = re.compile(r"\b(you|your|i|me|my|we|us)\b")
+
+
 class FormCue(Cue):
+    """Full evidence for the form of a command / request / question to "you". Half for any other QUESTION that involves the
+    speaker or the listener ("what colour shirt am I wearing?"): not enough to be accepted, enough to be worth the judge's
+    reading in a quiet room (seen live: asked of Blimpy under a mangled name, it scored zero and was dismissed unread)."""
     key = "form"
-    def evidence(self, ctx, P): return (1.0, "said like a command or a question to a robot") if directed(ctx.text) else None
+    def evidence(self, ctx, P):
+        if directed(ctx.text): return 1.0, "said like a command or a question to a robot"
+        t = (ctx.text or "").lower()
+        if t.rstrip().endswith("?") and PERSONAL.search(t): return 0.5, "a question involving the speaker or the listener"
+        return None
 
 
 class AnswerCue(Cue):
@@ -234,8 +244,9 @@ other people, and thinking aloud are not. Answer with one JSON object only:
 {{"for_robot": true/false, "confidence": 0.0-1.0, "why": "<= 8 words"}}"""
 
 
-PICTURES = (" The attached picture(s) are what the robot's camera saw WHILE this was said. Someone turned toward the camera, "
-            "looking or gesturing at it, speaks for the robot; people facing each other, a screen or a phone speak against.")
+PICTURES = (" The attached picture(s) were taken in the room WHILE this was said (the camera stands beside the microphone; the robot "
+            "may be the balloon in the picture). Someone looking or gesturing at the robot or at the camera speaks for the robot; "
+            "people facing each other, a screen or a phone speak against.")
 
 
 def judge_prompt(ctx, names, pictures=0):
@@ -243,8 +254,8 @@ def judge_prompt(ctx, names, pictures=0):
     if ctx.since_reply_s is not None: facts.append(f"The robot last spoke {ctx.since_reply_s:.0f} s before this." if ctx.since_reply_s > 0 else "The speaker talked over the robot.")
     if ctx.asked: facts.append("The robot's last words were a question.")
     if ctx.presence is not None:
-        facts.append("Nobody is in front of the robot." if not ctx.presence else "Someone is standing right in front of the robot."
-                     if (ctx.people or 1) == 1 else f"{ctx.people} people are standing in front of the robot.")
+        facts.append("Nobody is near the robot." if not ctx.presence else "Someone is standing close to the robot."
+                     if (ctx.people or 1) == 1 else f"{ctx.people} people are standing close to the robot.")
     if pictures: facts.append(PICTURES.strip())
     hist = "\n".join(f"  {who}: {t}" for who, t in ctx.history) or "  (nothing yet)"
     return JUDGE_PROMPT.format(name=names[0].capitalize(), room="loud, crowded hall" if ctx.loudness >= 0.5 else "quiet room, a few people",

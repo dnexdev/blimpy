@@ -269,7 +269,7 @@ check("several people in front of Blimpy: 'said to its face' is shared out (one 
       AD.resolve(C("turn left", presence=True, people=1), one).ok and not AD.resolve(C("turn left", presence=True, people=3), group).ok
       and one.parts["presence"][0] == 3 * group.parts["presence"][0] and AD.decide(C("turn left", presence=True)).score == one.score, f"{one.parts} {group.parts}")
 check("the judge is told how many people are in view and that pictures are attached",
-      "3 people are standing in front" in addressee.judge_prompt(C("turn left", presence=True, people=3), ("blimpy",))
+      "3 people are standing close to the robot" in addressee.judge_prompt(C("turn left", presence=True, people=3), ("blimpy",))
       and "picture" in addressee.judge_prompt(C("turn left"), ("blimpy",), 2) and "picture" not in addressee.judge_prompt(C("turn left"), ("blimpy",))
       and omni.pick_frames(list("abcdefg"), 2) == ["d", "g"] and omni.pick_frames(["a"], 2) == ["a"] and omni.pick_frames(list("abc"), 0) == [])
 check("room: the conversation fades, faster on the loud floor (follow-up at 3 s / 20 s quiet, 3 s / 6 s loud)", fade == [True, False, True, False], str(fade))
@@ -336,6 +336,12 @@ for _ in range(30): om3.feed_audio(loud); time.sleep(0.01)             # the nei
 held = mock.stats["audio_appends"] - a0
 check("the floor: once a turn is for Blimpy the mic stays shut until it has answered (nothing can cancel the answer), then reopens",
       held == 0 and wait_for(lambda: len(intents) > n_int, 4) and wait_for(lambda: not om3._floor_taken([]), 8) and om3._floor is None, f"{held} packets leaked, floor {om3._floor}")
+# seen live 2026-09-19: an ignored turn was answered out loud. A response.create of ours that was counted but never answered
+# (lost with a dropped socket, or raced by a spoken turn) made the server's reply to the NEXT spoken turn look like ours.
+quiesce(); om3.name_gate["mode"] = "quiet"; om3.t_last_reply = 0.0; om3._t_named = 0.0; om3._client_creates = 1
+check("a stale response.create of ours does not let the reply to someone else's sentence through",
+      ignored_after({"heard": "hey guys what colour shirt is that", "heard_after_ms": 200, "text": "A white shirt.", "audio_chunks": 4}), ignored_after.detail)
+om3._client_creates = 0
 # the judge inside the live path: the reply stays held while it thinks (0.3 s here), then plays or is dropped
 class SlowJudge(FakeJudge):
     wants_frames = True; frames = None

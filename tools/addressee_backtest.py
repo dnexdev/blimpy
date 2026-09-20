@@ -114,7 +114,8 @@ if __name__ == "__main__":
             if a.verbose or tag in ("changed", "WRONG"):
                 print(f"  {tag:7s} {'YES' if ok else 'no ':3s} \"{r['ctx']['text'][:70]}\"  [{why}]{'  (' + note + ')' if note else ''}"
                       + (f"   truth: {'YES' if truth else 'no'}" if truth is not None else f"   on the day: {'YES' if day else 'no'}"))
-        if any(r.pop("_fresh", False) for r in rows): f.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in every), encoding="utf-8")
+        # (a LIST, not a generator: any() stops at the first hit and the flag stayed in every other row, committed fixtures included)
+        if any([r.pop("_fresh", False) for r in rows]): f.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in every), encoding="utf-8")
     print(f"\n[backtest] {n} turns: labelled {right + wrong} ({right} right, {wrong} WRONG), unlabelled {unlabelled} ({changed} differ from the day)"
           + (f", {need} would need a fresh judge verdict (settled by the midpoint here)" if need else ""))
     sys.exit(1 if wrong else 0)

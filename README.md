@@ -6,8 +6,8 @@ on the laptop. `laptop/control/ble_gondola.py` is the bridge to the gondola; eve
 [PROTOCOL.md](PROTOCOL.md). **Read that first.**
 
 ```
-firmware/            legacy ESP32-C3 WiFi build (PlatformIO): mixer + failsafe + IMU on the board. Not what flies now (README 3).
-                     i2c_motor_slave/: a second ESP32 driving motors C and D over I2C from the BalloonRobot board (frees 5 pins).
+firmware/            the hardware team's gondola firmware: esp32_master.ino (Bluetooth LE "BalloonRobot", IMU, motors) + esp32_slave.ino
+                     (second ESP32 over I2C) + reference_control.py (minimal BLE client). See firmware/README.md.
 laptop/config.py     one place for sources, IPs, gains, vehicle physics (PHYS); room geometry is loaded from venues/default.json
 laptop/control/      ble_gondola.py (Bluetooth bridge to the gondola: mixer + failsafe + telemetry) · imu_store.py (IMU samples for everyone, http :5008)
                      protocol.py (shared mixer) · fake_esp32.py (stand-in + simulator) · teleop.py · follow_me.py · pilot.py · behaviors.py · estimator.py · link.py (telemetry watchdog)
@@ -50,7 +50,8 @@ for commands and how to use this reference in the main control code.
 
 `http://127.0.0.1:5008/imu` (latest IMU sample), `/imu/history?n=200`, `/status` while the bridge runs; the same data in
 Python via `laptop.control.imu_store`. Motor letters, signs and the IMU layout are set once on the bench (section 3).
-Legacy WiFi firmware (`firmware/`, PlatformIO, `cd firmware && pio run`) still works: pass `--esp blimpy-xxxx.local`.
+(The legacy WiFi firmware, a PlatformIO build with the mixer on the board, left the repo on 2026-09-19 when the hardware
+team's master / slave sketches replaced it; it is in git history before `de42b4c`. `--esp` still says where commands go.)
 
 **Network rule:** phones and Pis join the *laptop's hotspot*, never the hackathon WiFi. The gondola is on Bluetooth.
 
@@ -289,6 +290,53 @@ python -m laptop.control.pilot --no-voice              # FOLLOW uses the eye for
 4. Room camera (when the Pi or a phone is up): section 2 as before. With both, the pilot prints `FOLLOW eye+room`
    and the heading estimate locks within a second of the eye seeing you.
 
+### Several people in the room (`laptop/vision/people.py`, `laptop/control/scene.py`, `laptop/vision/eyes.py`)
+
+Seen in the two-person rehearsal (2026-09-19): Blimpy mixed up whose shirt was whose, answered "am I on your left?" from
+the webcam's side of the picture, and could not "go behind my friend". Causes, all in our code: the room camera kept only
+the LARGEST box as "the person" (and sent `null` when that box was cut by the frame, with a second person in plain
+view); the model was never told the picture comes from a fixed room camera beside the mic, so it took whoever was
+visible for the speaker; and no command could name another person.
+- **Roster**: everybody in view gets a label (P1, P2 ...) that survives occlusion, leaving and returning, and tracker-id
+  swaps: a small gallery of clothes-colour signatures per person + the floor position from the tag mat. A close call is
+  flagged (`amb`) and the name on that label is dropped: a wrong name is worse than none. Position quality is explicit:
+  `feet` exact | `approx` | `head` (feet out of the picture) | none (someone right at the laptop: listed, no metres).
+- **One camera owner**: mono serves its picture and that frame's people on `127.0.0.1:5019`; `pilot --omni-cam room`
+  (automatic in `tools/rehearse.py --person real`) makes that Blimpy's eyes. Also the way to have eyes at all on Windows
+  while mono runs (one process per webcam). Plain `pilot` still opens camera 0 itself.
+- **Marks**: the pilot draws, on the picture the model gets, each person's box + label (+ name), the balloon as
+  `BLIMPY (you)` with its nose, the mat's axes, and a strip with measured facts:
+  `P1 Raymond: 1.4 m LEFT of Blimpy | P2: about 2.1 m AHEAD of Blimpy | nearest the mic: P1`. Left / right / ahead /
+  behind are computed in the tag-mat world frame from Blimpy's position and heading, never from the side of the
+  picture; with no confident heading the strip says so. The instructions tell the model to trust the strip, that it is
+  the balloon IN the picture, and that the speaker is often outside the picture ("nearest the mic" = best guess).
+- **Naming and targeting by voice**: "I'm Raymond", "this is Peter" (`name_person`); "follow Peter", "go to P2",
+  "go behind my friend" (`set_intent` with `person`, `where`). `me` = the current target, else the person nearest the
+  camera/mic; with several people Blimpy is told whom it took, so a wrong guess gets corrected out loud. A person whose
+  feet are out of the picture is refused with the reason, not flown at.
+- **Addressing**: the judge is no longer told "nobody is in front of the robot" on a build with no eye on the balloon;
+  it gets the roster's count of people near the balloon, or nothing when that is unknown.
+- **AprilTags**: the mat's world frame now reaches the model (axes and the BLIMPY marker in the picture, every distance
+  in the strip); a machine with no checkerboard calibration gets its focal length fitted from the mat at `--auto-calib`
+  when the mat clearly disagrees with the nominal value.
+- **Not built, on evidence**: who is SPEAKING from lip motion. In the recorded frames the speaker's head is out of the
+  picture and the other person has his back to the camera. Each turn logs a `scene` snapshot, so a speaker cue can be
+  measured before anything trusts it.
+`python tools/people_test.py` and `python tools/scene_test.py` (1 s each, no camera).
+
+**Flying it with the room camera as Blimpy's eyes (three windows; the demo laptop is Windows, one process per webcam):**
+```powershell
+python -m laptop.vision.mono --auto-calib --show      # owns the webcam: labels everybody, serves the picture on 127.0.0.1:5019
+python -m laptop.control.ble_gondola                  # the Bluetooth bridge
+python -m laptop.control.pilot --omni-cam room        # Blimpy sees mono's picture with the marks drawn on it
+```
+First time on a machine: `pip install -r requirements.txt` (it now lists `lap`, which the person tracker needs), and run
+mono once WITH internet: `yolo11s.pt` is not in the repo and is downloaded on first use. A new balloon is a new
+diameter: measure it and set `PHYS D` before mono starts (apparent size -> distance). `--omni-cam room` was written and
+tested on a MacBook; if the pilot prints its BLIND warning on Windows, `--omni-cam none` flies ears-only (following
+uses mono's position message, not the picture). A machine whose webcam has no checkerboard calibration sets
+`BLIMPY_CALIB_A=<name>` and `BLIMPY_DEVICE` in `.env` (see `.env.example`); the demo laptop needs neither.
+
 ## 1f. Rehearse the whole demo without the robot
 
 The simulated gondola (eye + ultrasonic, walking person, live plot) behind the BLE bridge, the real pilot, the real
@@ -509,8 +557,8 @@ is the design behind it (balloon size, motor layout, IMU orientation, the clip, 
 4. Failsafe: Ctrl+C teleop -> the bridge sends `STOP` within 0.5 s and every motor stops. Then kill the BRIDGE while the
    motors run: if they keep spinning, the firmware has no command timeout yet. Ask the hardware team for one (STOP after
    500 ms without a command); until then keep the gondola tethered and a `STOP` ready.
-5. Legacy WiFi board instead? Flash `firmware/` (`cd firmware && pio run -t upload`) and pass `--esp blimpy-xxxx.local`
-   to teleop / follow_me / pilot; the pin table is PROTOCOL.md section 9.
+5. (The legacy WiFi board's firmware is no longer in the repo: git history before `de42b4c`. PROTOCOL.md section 9 keeps
+   its pin table for reference.)
 6. Only now attach to the balloon. Trim ballast ~1 gf HEAVY (sinks very slowly with motors off; see PROTOCOL.md section 6).
 
 ## 3b. Bench measurements -> `laptop/config.py` PHYS

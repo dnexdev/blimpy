@@ -46,11 +46,11 @@ def person_point(a, b):
 
 
 def draw(frame, persons, balloon, text):
-    for p in persons[:1]:
+    for p in persons:                                   # everybody (the roster's label when there is one: mono.py)
         x1, y1, x2, y2 = map(int, p["box"])
         cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
         cv2.circle(frame, tuple(map(int, p["pt"])), 6, (0, 255, 0), -1)
-        label(frame, f"person id={p['id']}", (x1, max(18, y1 - 6)), 0.6, (0, 255, 0))
+        label(frame, p.get("pid") or f"person id={p['id']}", (x1, max(18, y1 - 6)), 0.6, (0, 255, 0))
     if balloon:
         x1, y1, x2, y2 = map(int, balloon["box"])
         cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 128, 0), 2)

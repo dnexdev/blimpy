@@ -18,6 +18,9 @@ F = config.FPV
 REV_EFF = config.PHYS["REV_EFF"]
 
 
+NUDGE_DIRS = {"forward": (1.0, 0.0), "back": (-1.0, 0.0), "backward": (-1.0, 0.0), "left": (0.0, 1.0), "right": (0.0, -1.0)}   # body frame: +x ahead, +y left
+
+
 class Behaviors:
     def __init__(self, say, now=time.monotonic, obstacles=None, arena=None, rng=None):
         self.say, self.now = say, now
@@ -75,6 +78,11 @@ class Behaviors:
         self._person_n = 0 if self._person_n >= 3 else self._person_n
         self.person, self.t_person, self._t_person_meas = xyz, now, t_meas
 
+    def reset_person(self):
+        """The pilot chose ANOTHER person to act on: forget the track, so the jump gate above does not first ignore and
+        then blend the new person's position into the old one's."""
+        self.person, self.person_v, self._person_n = None, [0.0, 0.0], 0
+
     def on_fpv(self, obs, t_ms=None):
         """The eye on the balloon saw the person: bearing (+ = left), elev, range (None = box cut by the frame = close).
         The range gets an alpha-beta track so the closing speed is known without any world-frame velocity."""
@@ -117,8 +125,23 @@ class Behaviors:
         elif k in ("wander", "go_to") and getattr(est, "rel", False):
             return "I can't see the room from up here, only you. I can follow you, turn, or hold still."
         elif k == "wander":    self._set("WANDER"); self.wander_wp = None
+        elif k == "nudge" or (k == "go_to" and it.get("target") in NUDGE_DIRS):
+            # "move forward a bit": a short step relative to where Blimpy faces, then hold there. Seen live 2026-09-19: the model
+            # sent go_to target "forward" (not a place), which silently meant "fly to the speaker"; such targets land here.
+            move = it.get("move") or it.get("target") or "forward"
+            if move not in NUDGE_DIRS: return "Which way: forward, back, left or right?"
+            if getattr(est, "rel", False) or est.p is None or est.psi is None or not getattr(est, "head_confident", True):
+                return "I'm not sure which way I'm facing yet. Give me a moment, or ask me to follow you."
+            d = clamp(float(it.get("metres", 0.5) or 0.5), 0.1, 2.0)
+            fx, fy = NUDGE_DIRS[move]; c, s = math.cos(est.psi), math.sin(est.psi)
+            self._set("HOVER")
+            self.hold_xy = (est.p[0] + d * (fx * c - fy * s), est.p[1] + d * (fx * s + fy * c))     # body -> world; avoid() still keeps it off the walls
         elif k == "go_to":
             tgt = it.get("target", "me")
+            if tgt == "person": tgt = "me"                        # the pilot already made that person THE person (scene.resolve)
+            if tgt == "point" and it.get("_xy") is None: return "I don't know where that is."
+            if tgt not in ("judges", "home", "me", "point"): return "I don't know that place. I know the judges' table, home, and you."
+            if tgt == "point": self.goto_point = (float(it["_xy"][0]), float(it["_xy"][1]))
             if tgt == "judges" and config.JUDGES_XY is None: return "I don't know where the judges are yet."
             if tgt == "home" and self.home is None: return "I don't have a home spot yet."
             self.goto_target = tgt; self._set("GO_TO"); self.stuck_since = self.now(); self.flips = 0; self.detour = None
@@ -440,6 +463,7 @@ class Behaviors:
         t = self.goto_target
         if t == "judges": return config.JUDGES_XY
         if t == "home": return self.home
+        if t == "point": return getattr(self, "goto_point", None)
         return (self.person[0], self.person[1]) if self.person else None
 
     def _wander_waypoint(self):

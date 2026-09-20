@@ -21,6 +21,8 @@ def main():
     ap.add_argument("--relative", action="store_true", help="no room camera in the sim (eye + ultrasonic only) and pilot --relative")
     ap.add_argument("--person", default="walk", choices=["static", "walk", "route", "random", "real"])
     ap.add_argument("--cam", default=None, help="with --person real: camera source for mono.py (default config.SOURCES A)")
+    ap.add_argument("--cam-name", default=None, help="with --person real: calibration name for mono.py (default config.CALIB_NAMES A = env BLIMPY_CALIB_A)")
+    ap.add_argument("--device", default=None, help="with --person real: detector device for mono.py (default env BLIMPY_DEVICE; a Mac wants mps)")
     ap.add_argument("--psi0", type=float, default=0.3, help="initial heading (rad); 0.3 = the person starts in the eye's view")
     ap.add_argument("--no-plot", action="store_true")
     ap.add_argument("rest", nargs=argparse.REMAINDER, help="pilot arguments after --")
@@ -36,9 +38,12 @@ def main():
     if a.person == "real":
         cmd = [sys.executable, "-m", "laptop.vision.mono", "--auto-calib", "--show", "--port", "5017"]
         if a.cam is not None: cmd += ["--a", a.cam]
+        if a.cam_name is not None: cmd += ["--name", a.cam_name]
+        if a.device is not None: cmd += ["--device", a.device]
         print("[rehearse] room camera:", " ".join(cmd[2:]), "(board in view, hands off the laptop for 3 s)")
         mono = subprocess.Popen(cmd)
     time.sleep(2.5)
+    if a.person == "real" and "--omni-cam" not in rest: rest = ["--omni-cam", "room", *rest]   # mono owns the webcam: Blimpy sees ITS picture, with everybody labelled
     try:
         sys.argv = ["pilot", *rest]
         from laptop.control.pilot import main

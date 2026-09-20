@@ -83,6 +83,26 @@ than ~1 m); `box` normalised. It carries no world position: `balloon`/`person` a
 Recorded sessions (`laptop/positioning/session.py`) wrap each datagram verbatim in `{"kind","t_ms","wall","data"}`;
 format in `laptop/positioning/schema.py`. Laptop-internal, not part of the firmware contract.
 
+### 4b. Everybody in view (5018) and the room camera's picture (http 5019): `mono.py` -> anyone
+
+`person` above is ONE person: the one the pilot asked for, else the room camera's sticky primary (not simply the largest
+box any more; a primary whose feet are out of the picture gives `null` = hold, it never silently becomes someone else).
+`person_id` is that person's label number. Everybody else, and the picture they were seen in:
+```json
+{"t":123460,"src":"people","run":1789850000123,"lost":null,"who":"P1",
+ "people":[{"id":"P1","xyz":[1.92,0.41,1.14],"q":"feet","box":[640,180,760,610]},
+           {"id":"P2","xyz":null,"q":null,"box":[905,0,1279,719],"amb":1}]}
+```
+`id` = a label that survives occlusion, leaving and coming back, and tracker-id swaps (`laptop/vision/people.py`:
+appearance signature + floor position). `q` says how far to trust `xyz`: `feet` exact (feet on the floor, 5-10 % of
+range) | `approx` (box cut by a side edge) | `head` (feet cut, head ray at an assumed height) | `null` (head and feet out
+of the picture: no metres invented). `amb` = the last re-attachment was a close call: drop any NAME bound to that label.
+`run` changes when mono restarts (labels restart at P1). `lost` as in section 4; then `xyz` is null for everyone.
+At most 6 people, < 1200 bytes. `GET http://127.0.0.1:5019/frame.jpg[?target=P2]` returns the newest frame as JPEG with
+the same object (+ `balloon_box`, `P` 3x4, `cam`, `size`, `nominal`) in the header `X-Blimpy-Meta`, so picture and
+labels belong together; `target` is how the pilot chooses who `person` is (`laptop/vision/eyes.py`). One process owns
+the webcam: this is how Blimpy's eyes in conversation and the room camera are the same camera on Windows.
+
 ## 5. Frames and conventions
 
 - **World**: origin = centre of the floor AprilTag (36h11, id 0). +X along the tag's left->right edge,
@@ -114,7 +134,7 @@ a fixed prop in reverse gives ~60 % thrust).
 | yr = 1.0   | 1.0 rad/s CCW  | YR_MAX = 1.0 rad/s |
 | vf, vs, vz | motor duty fractions; laptop caps them at 0.3–0.4 | CAP = 0.5 in the mixer |
 
-## 7. Mixer (50 Hz) — `laptop/control/protocol.py::mix`, run by the bridge (legacy WiFi build: `firmware/include/mixer.h` on the board)
+## 7. Mixer (50 Hz) — `laptop/control/protocol.py::mix`, run by the bridge (the legacy WiFi build ran it on the board; that source left the repo 2026-09-19, git history before `de42b4c`)
 
 ```
 gzNorm = measured_yaw_rate / YR_MAX          (0 if no IMU -> open loop)

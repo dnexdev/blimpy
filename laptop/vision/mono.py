@@ -21,8 +21,8 @@ The per-tick logic lives in step() (pure, no I/O) so tools/vision_test.py can dr
 import argparse, time
 import cv2, numpy as np
 from .. import config
-from ..control.protocol import STATE_PORT, UdpJson, now_ms
-from . import floor
+from ..control.protocol import PEOPLE_PORT, ROOM_HTTP_PORT, STATE_PORT, UdpJson, now_ms
+from . import floor, people
 from .calib_io import Camera, make_tag_detector
 from .localize import PERSON_Z_M, STALE_MS, draw, nulls
 from .streams import label
@@ -101,11 +101,15 @@ def balloon_from_box(cam, box, diam, min_px=12):
 
 
 def step(cam, person_det, balloon_det, frame, prev_t, now, stale_ms=STALE_MS, person_z=PERSON_Z_M,
-         balloon_diam=BALLOON_DIAM_M, min_balloon_px=12):
+         balloon_diam=BALLOON_DIAM_M, min_balloon_px=12, roster=None, want=None, blind=False):
     """One localisation tick. Pure: no sockets, no sleeping.
     frame  (img, t_ms) as returned by Stream.latest();  prev_t {"t": last processed t}  MUTATED in place.
     Returns (msg, dets): msg None -> nothing new; msg PROTOCOL s4 dict (+ 'lost') -> send it.
-    dets = {"persons", "balloon", "why"} or None when the detectors did not run."""
+    dets = {"persons", "balloon", "why"} or None when the detectors did not run.
+    roster (people.Roster) = everybody gets a label and a floor position (dets["people"]), and "person" is the one the
+    pilot asked for (`want`, a label) or the roster's sticky primary, never simply the largest box. roster None = the
+    single-person behaviour this function always had. blind = the camera pose is stale (drift): people keep their labels,
+    nobody gets metres (and no stale position is remembered for the re-attachment gate)."""
     img, t = frame
     if img is None or t is None:
         return None, None
@@ -118,7 +122,16 @@ def step(cam, person_det, balloon_det, frame, prev_t, now, stale_ms=STALE_MS, pe
     persons, balloon = person_det.detect(img), balloon_det.detect(img)
     person3 = balloon3 = None
     why = {"person": "none seen", "balloon": "none seen"}
-    if persons:
+    ppl, who = None, None
+    if roster is not None:
+        for d in persons: d["near"] = people.very_near(cam, d, roster.P)
+        where = [(None, None)] * len(persons) if blind else [people.locate(cam, d, roster.P) for d in persons]
+        ppl = roster.update(persons, where, [people.signature(img, d["box"]) for d in persons], int(t))
+        who = roster.select(want)
+        if who is None: why["person"] = f"{len(ppl)} in view, none selected" if ppl else "none seen"
+        elif who.q == "feet": person3 = who.xyz; why["person"] = f"ok {who.label}" + (f" of {len(ppl)}" if len(ppl) > 1 else "")
+        else: why["person"] = f"{who.label}: {'feet cut off' if who.q in ('head', None) else 'cut by the side of the picture'} (holding)"
+    elif persons:
         X, why["person"] = person_from_box(cam, persons[0]["box"], person_z)
         if X is not None:
             person3 = [round(float(v), 3) for v in X]
@@ -126,10 +139,10 @@ def step(cam, person_det, balloon_det, frame, prev_t, now, stale_ms=STALE_MS, pe
         X, why["balloon"] = balloon_from_box(cam, balloon["box"], balloon_diam, min_balloon_px)
         if X is not None:
             balloon3 = [round(float(v), 3) for v in X]
-    msg = {"t": int(t), "balloon": balloon3, "person": person3,
-           "person_id": int(persons[0]["id"]) if person3 is not None else -1,
+    pid = (who.pid if who is not None else int(persons[0]["id"])) if person3 is not None else -1
+    msg = {"t": int(t), "balloon": balloon3, "person": person3, "person_id": pid,
            "src": "vision", "skew_ms": 0, "lost": None}
-    return msg, {"persons": persons, "balloon": balloon, "why": why}
+    return msg, {"persons": persons, "balloon": balloon, "why": why, "people": ppl, "who": who.label if who is not None else None}
 
 
 def main():
@@ -139,7 +152,7 @@ def main():
     ap.add_argument("--calib", default=config.CALIB_DIR)
     ap.add_argument("--show", action="store_true")
     ap.add_argument("--stale-ms", type=int, default=STALE_MS)
-    ap.add_argument("--device", default=None, help="ultralytics device: 0, cpu, mps ... (default: auto)")
+    ap.add_argument("--device", default=config.VISION_DEVICE, help="ultralytics device: 0, cpu, mps ... (default: config.VISION_DEVICE = env BLIMPY_DEVICE, else auto)")
     ap.add_argument("--conf-person", type=float, default=0.4)
     ap.add_argument("--conf-balloon", type=float, default=0.3)
     ap.add_argument("--balloon-color", default=config.BALLOON_COLOR, help="colour-blob balloon detector; 'none' = YOLO only")
@@ -149,6 +162,8 @@ def main():
     ap.add_argument("--rot", type=int, default=0, help="degrees clockwise to rotate the stream (phone in portrait: 90)")
     ap.add_argument("--auto-calib", action="store_true", help="pose from the floor mat at start; re-solve when the drift check trips 2 s running")
     ap.add_argument("--port", type=int, default=STATE_PORT, help=f"publish the fixes to this localhost port (default {STATE_PORT}; 5017 feeds the simulator's --person real)")
+    ap.add_argument("--no-people", action="store_true", help="the old single-person behaviour: no roster, no picture server (laptop/vision/people.py, eyes.py)")
+    ap.add_argument("--eyes-port", type=int, default=ROOM_HTTP_PORT, help="serve the newest frame + everybody in it on 127.0.0.1:PORT for the pilot (--omni-cam room); 0 = off")
     ap.add_argument("--spacing", type=float, nargs="+", default=None, help="m between mat tag centres (one value or +X +Y); default: calib/mat.json from survey_mat.py, else config.MAT")
     args = ap.parse_args()
     from .detect import BalloonDetector, PersonTracker   # lazy: slow import, optional for --help
@@ -163,6 +178,30 @@ def main():
                                   color=None if args.balloon_color in (None, "none") else args.balloon_color)
     print(f"[balloon] mode: {balloon_det.mode}, diameter {args.balloon_diam} m")
     out = UdpJson()
+    roster = None if args.no_people else people.Roster()
+    run = now_ms()                                          # labels restart at P1 with this process: names bound to them die with it
+    eyes = None
+    if roster is not None and args.eyes_port:
+        from .eyes import EyesServer
+        eyes = EyesServer(args.eyes_port).start()
+        print(f"[people] everybody in view gets a label; picture + people on http://127.0.0.1:{args.eyes_port}/frame.jpg (pilot --omni-cam room), people on udp {PEOPLE_PORT}")
+    try:
+        with np.load(f"{args.calib}/{args.name}_intrinsics.npz") as z: nominal = float(z["rms"]) < 0      # a nominal pinhole, not a checkerboard calibration: metres are approximate
+    except Exception: nominal = False
+
+    def share(img, t, lost, dets):
+        """Everybody in this frame -> udp PEOPLE_PORT and, with the picture itself, the eyes server. With a stale pose
+        (lost) people keep their labels and boxes but no metres."""
+        ppl = list((dets or {}).get("people") or [])
+        if lost: ppl = [dict(p, xyz=None, q=None) for p in ppl]
+        row = {"t": int(t), "src": "people", "run": run, "lost": lost, "who": (dets or {}).get("who"), "people": ppl}
+        out.send(row, ("127.0.0.1", PEOPLE_PORT))
+        if eyes is not None and img is not None:
+            ok, jpg = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            if ok:
+                b = (dets or {}).get("balloon")
+                eyes.publish(jpg.tobytes(), dict(row, balloon_box=[int(v) for v in b["box"]] if b else None, size=[img.shape[1], img.shape[0]], nominal=nominal,
+                                                 P=np.round(cam.P, 4).tolist(), cam=[round(float(v), 3) for v in cam.position()]))
     n_frames, t_rate, prev_t = 0, time.monotonic(), {"t": None}
     why, msg = {"person": "-", "balloon": "-"}, nulls(now_ms(), None)
     tag_det, guard = make_tag_detector(), floor.DriftGuard(args.drift_px)
@@ -185,12 +224,16 @@ def main():
                             print(f"[mono] camera moved ({guard.last:.0f} px): re-solved. " + floor.describe(cam, info))
                         else:
                             print(f"[mono] camera moved ({guard.last:.0f} px) but cannot re-solve: {info['why']}")
+                if roster is not None and roster.visible: print(f"[people] {' '.join(roster.people[k].label + ':' + str(roster.people[k].q) for k in roster.visible)}  target={eyes.target if eyes is not None else None}")
                 print(f"[mono] {n_frames} Hz  cam {stream.fps:.0f} fps  lost={msg['lost']}  person={msg['person']} "
                       f"({why['person']})  balloon={msg['balloon']} ({why['balloon']})  "
                       f"tag drift px={guard.last and round(guard.last, 1)}")
                 n_frames, t_rate = 0, time.monotonic()
             if guard.bad:                              # stale pose: say so instead of publishing wrong fixes
                 msg = nulls(now_ms(), "drift"); out.send(msg, ("127.0.0.1", args.port))
+                if roster is not None and frame[0] is not None and frame[1] != prev_t["t"]:      # people keep their labels; no metres from a stale pose
+                    _, d2 = step(cam, person_det, balloon_det, frame, prev_t, now_ms(), args.stale_ms, balloon_diam=args.balloon_diam, roster=roster, blind=True)
+                    if d2: share(frame[0], frame[1], "drift", d2)
                 if args.show and frame[0] is not None:       # keep the window live, say why nothing is tracked
                     img = frame[0].copy()
                     label(img, f"{args.name}: MAT MOVED ({guard.last and round(guard.last)} px) - re-solving the camera pose: "
@@ -200,7 +243,7 @@ def main():
                         break
                 time.sleep(0.05); continue
             msg2, dets = step(cam, person_det, balloon_det, frame, prev_t, now_ms(), args.stale_ms,
-                              balloon_diam=args.balloon_diam)
+                              balloon_diam=args.balloon_diam, roster=roster, want=eyes.target if eyes is not None else None)
             if msg2 is None:
                 time.sleep(0.005); continue
             msg = msg2
@@ -210,6 +253,7 @@ def main():
             else:
                 n_frames += 1
             if dets: why = dets["why"]
+            if dets and roster is not None: share(frame[0], frame[1], None, dets)
             if args.show and dets:
                 img = frame[0].copy()
                 draw(img, dets["persons"], dets["balloon"], f"{args.name}  balloon={msg['balloon']}  person={msg['person']}")
@@ -220,6 +264,7 @@ def main():
         pass
     finally:
         stream.stop(); cv2.destroyAllWindows()
+        if eyes is not None: eyes.stop()
 
 
 if __name__ == "__main__":

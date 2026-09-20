@@ -98,7 +98,8 @@ class PersonTracker:
         for (x1, y1, x2, y2), c, i in zip(r.boxes.xyxy.tolist(), r.boxes.conf.tolist(), ids):
             cx = (x1 + x2) / 2
             out.append({"id": i, "box": (x1, y1, x2, y2), "conf": c, "pt": (cx, y1 + 0.35 * (y2 - y1)),
-                        "feet": (cx, y2), "head": (cx, y1), "cut": {"top": y1 <= self.EDGE_PX, "bottom": y2 >= h - self.EDGE_PX},
+                        "feet": (cx, y2), "head": (cx, y1), "cut": {"top": y1 <= self.EDGE_PX, "bottom": y2 >= h - self.EDGE_PX,
+                                                                        "left": x1 <= self.EDGE_PX, "right": x2 >= w - self.EDGE_PX},
                         "area": (x2 - x1) * (y2 - y1)})
         out.sort(key=lambda d: -d["area"])
         return out

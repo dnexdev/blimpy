@@ -6,6 +6,7 @@
 numpy
 opencv-contrib-python>=4.8
 ultralytics>=8.3
+lap                   # the person tracker (model.track, laptop/vision/detect.py) needs it; ultralytics otherwise pip-installs it at FIRST USE (internet, mid-demo)
 pillow
 matplotlib
 # voice layer (laptop/voice): local LLM via Ollama (install app + `ollama pull qwen2.5:7b`), whisper STT, offline TTS

@@ -52,6 +52,9 @@ class SessionRecorder:
         """Blimpy's own words (context when reading a session back; the backtest skips these rows)."""
         self._write({"who": "blimpy", "t": round(self.now(), 2), "text": text})
 
+    def event(self, what, **kw):
+        self._write(dict({"who": "sys", "t": round(self.now(), 2), "what": what}, **kw))
+
     def _write(self, rec):
         with self._lock:
             with open(self.dir / "turns.jsonl", "a", encoding="utf-8") as f: f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
