@@ -28,6 +28,7 @@ from .. import config
 from .protocol import CMD_PORT, STATE_PORT, TELEM_PORT, UdpJson, make_cmd, now_ms, resolve
 from .estimator import StateEstimator
 from .link import TelemWatchdog
+from .altitude import LiftHold
 from .behaviors import Behaviors
 from .follow_me import nudge_ok
 from .keys import ESC, KeyPoller
@@ -45,6 +46,8 @@ def main():
     ap.add_argument("--spk", default=None, metavar="DEVICE", help="output device for Blimpy's voice (e.g. 'Speakers' when AirPods are the mic and Windows moved the output to them)")
     ap.add_argument("--omni-cam", default=None, metavar="SPEC",
                     help=f"camera Blimpy sees through in omni mode (default config.OMNI['CAMERA'] = {config.OMNI['CAMERA']!r}; 'none' = ears only)")
+    ap.add_argument("--auto-arm", type=float, default=None, metavar="S", help="arm by itself once the box answers and the balloon has been in view for S seconds "
+                    "(a camera window takes the keyboard focus, and SPACE never reaches this terminal). Once per run; SPACE / ESC still work")
     ap.add_argument("--log", nargs="?", const="", default=None, metavar="NAME", help="record state/telemetry/commands to data/positioning/<ts>_pilot[_NAME]/ (laptop/positioning)")
     ap.add_argument("--fpv", default=config.FPV["SOURCE"], metavar="SPEC", help="the eye on the balloon: ESP32-CAM stream URL or camera index (default config.FPV SOURCE); it is also what Blimpy sees in omni mode unless --omni-cam says otherwise")
     ap.add_argument("--no-fpv", action="store_true")
@@ -213,9 +216,11 @@ def main():
     log = open_session(args.log, tag="pilot")    # NullLog unless --log: records what this loop consumed, heard and sent
     est = StateEstimator(alpha=G["POS_ALPHA"], beta=G["VEL_BETA"])
     wd = TelemWatchdog()                          # telemetry silence / board-side failsafe -> disarm (laptop/control/link.py)
+    lift = LiftHold()                                # the height loop (laptop/control/altitude.py), gains config.HOVER
     beh = Behaviors(say)
     armed, nudge_end, recording = False, 0.0, False
     t_balloon = 0; t_eye = None
+    t_seen, auto_left = None, args.auto_arm
 
     def run_text(text):
         if not text.strip(): return
@@ -245,7 +250,9 @@ def main():
             t, now = time.monotonic(), now_ms()
             for s, _ in state_in.recv_all():                  # every row: eye rows are interleaved with the vision rows
                 log.state(s)
-                if s.get("balloon"): est.update_balloon(s["balloon"], s.get("t", now)); t_balloon = now
+                if s.get("balloon"):
+                    est.update_balloon(s["balloon"], s.get("t", now)); t_balloon = now
+                    lift.update(s["balloon"], s.get("t", now) / 1000.0)     # the height loop keeps its own track of the raw fixes
                 if s.get("person") and now - t_switch > 600: beh.on_person(s["person"], s.get("t"))   # rows of the PREVIOUS person are still in flight right after a switch
                 if s.get("fpv"): beh.on_fpv(s["fpv"], s.get("t"))          # the eye from the sim or a standalone fpv.py
             if eye is not None:
@@ -256,12 +263,18 @@ def main():
                 if (warn := wd.telem(m, t, armed)): print(f"\n[pilot] {warn}")
             if args.relative and est.p is None and est.seed_relative(): print("\n[pilot] relative mode: no room camera, flying on the eye + altimeter")
 
-            while (k := keys.poll()) is not None:
+            pressed = []
+            while (k := keys.poll()) is not None: pressed.append(k)
+            if auto_left is not None and not armed:
+                ok = est.p is not None and now - t_balloon < 300 and wd.t_last is not None and t - wd.t_last < 1.0
+                t_seen = (t if t_seen is None else t_seen) if ok else None
+                if t_seen is not None and t - t_seen >= auto_left: pressed.append(" "); auto_left = None; print("\n[pilot] auto-arm")
+            for k in pressed:
                 if k == " ":
                     armed = not armed; log.event("arm", armed=armed)
                     if armed:
-                        wd.arm(t); beh.on_armed(est)
-                        if not est.head_ok and not est.rel and not nudge_ok(est, beh.obstacles, beh.arena): say("I need more room to learn which way I'm facing.")
+                        wd.arm(t); beh.on_armed(est); lift.arm()            # hold the height it has right now
+                        if not est.head_ok and not est.rel and not nudge_ok(est, beh.obstacles, beh.arena): print("\n[pilot] not much room here to learn the heading (follow / go-to need it; hover and move left / right do not)")
                 elif k == "n" and armed: est.forget_heading(); beh.acq_i, beh.acq_t0, beh.acq_n = 0, None, 0
                 elif k == "v" and local_ok: voice_toggle()
                 elif k == "m" and omni is not None: omni.muted = not omni.muted; print(f"\n[pilot] cloud mic {'MUTED' if omni.muted else 'open'}")
@@ -300,6 +313,9 @@ def main():
                     armed, note = False, "BALLOON LOST -> disarm"; log.event("disarm", reason="balloon lost")
                 else:
                     vf, vs, yr, vz, note = beh.step(est)
+                    if not est.rel:                                  # room camera: the height is NOT the behaviours' (or the voice agent's)
+                        vz = lift.cmd(t, beh.z_offset)               # business. altitude.LiftHold decides the fan every tick, whatever
+                        note = f"{note} | {lift.note}"               # the mode; "go up / down" only moves its target (z_offset)
             est.observe_motion(vf, vs, vz)
             cmd = make_cmd(vf, yr, vz, armed, vs)
             cmd_out.send(cmd, (args.esp, CMD_PORT)); log.cmd(cmd)

@@ -186,18 +186,20 @@ class AltHold:
     """Vertical P + I + D. The integrator learns the ballast trim (the balloon is never exactly neutral, and lift
     changes by grams as the room warms), so height converges instead of sitting a few cm low forever."""
 
-    def __init__(self):
+    def __init__(self, gains=None):
+        self.g = G if gains is None else gains      # hover.py passes config.HOVER (the V motor alone, a wider trim range)
         self.i, self.t = 0.0, None
 
     def cmd(self, z_target, est, now=None):
+        g = self.g
         now = time.monotonic() if now is None else now
         dt = 0.0 if self.t is None else min(0.5, max(0.0, now - self.t))
         self.t = now
         z_target = clamp(z_target, A["Z_MIN"], A["Z_MAX"])
         ez = z_target - est.p[2]
-        self.i = clamp(self.i + G["Z_KI"] * ez * dt, -G["Z_I_MAX"], G["Z_I_MAX"])
-        u = (G["K_Z"] * ez if abs(ez) > G["Z_DEADBAND"] else 0.0) - G["K_VZ"] * est.v[2] + self.i
-        return lin(u, G["VZ_CAP"])
+        self.i = clamp(self.i + g["Z_KI"] * ez * dt, -g["Z_I_MAX"], g["Z_I_MAX"])
+        u = (g["K_Z"] * ez if abs(ez) > g["Z_DEADBAND"] else 0.0) - g["K_VZ"] * est.v[2] + self.i
+        return lin(u, g["VZ_CAP"])
 
 
 def follow_cmd(est, person, standoff=None, v_max=None, obstacles=None, arena=None, alt=None, z_target=None, now=None,
@@ -268,12 +270,14 @@ def main():
     args = ap.parse_args()
     args.esp = resolve(args.esp)
     from .behaviors import Behaviors          # same brain as pilot.py, minus the voice
+    from .altitude import LiftHold            # (imports AltHold from this module: not at the top)
     from ..positioning.session import open_session
 
     state_in, tel_in, cmd_out, keys = UdpJson(STATE_PORT), UdpJson(TELEM_PORT), UdpJson(), KeyPoller()
     log = open_session(args.log, tag="follow")   # NullLog unless --log: records what this loop consumed and sent
     est = StateEstimator(alpha=G["POS_ALPHA"], beta=G["VEL_BETA"])
     wd = TelemWatchdog()                          # telemetry silence / board-side failsafe -> disarm (laptop/control/link.py)
+    lift = LiftHold()                             # the height loop, beside the behaviours (laptop/control/altitude.py)
     beh = Behaviors(lambda s: print(f"\n[blimpy] {s}"))
     armed, t_balloon = False, 0
     print(__doc__)
@@ -284,6 +288,7 @@ def main():
                 log.state(s)
                 if s.get("balloon"):
                     est.update_balloon(s["balloon"], s.get("t", now)); t_balloon = now
+                    lift.update(s["balloon"], s.get("t", now) / 1000.0)
                 if s.get("person"):
                     beh.on_person(s["person"], s.get("t"))
                 if s.get("fpv"):
@@ -297,7 +302,7 @@ def main():
                 if k == " ":
                     armed = not armed; log.event("arm", armed=armed)
                     if armed:
-                        wd.arm(t); beh.on_armed(est)
+                        wd.arm(t); beh.on_armed(est); lift.arm()
                         if not est.head_ok and not nudge_ok(est, beh.obstacles, beh.arena):
                             print("\n[blimpy] not much room here to learn which way I'm facing")
                 elif k == "n" and armed:
@@ -319,6 +324,7 @@ def main():
                     armed, note = False, "BALLOON LOST -> disarm"; log.event("disarm", reason="balloon lost")
                 else:
                     vf, vs, yr, vz, note = beh.step(est)
+                    vz = lift.cmd(t, beh.z_offset); note = f"{note} | {lift.note}"
             est.observe_motion(vf, vs, vz, t)
             cmd = make_cmd(vf, yr, vz, armed, vs)
             cmd_out.send(cmd, (args.esp, CMD_PORT)); log.cmd(cmd)

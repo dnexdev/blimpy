@@ -58,7 +58,7 @@ def make_cmd(vf, yr, vz, arm, vs=0.0):
             "yr": round(clamp(yr, -1, 1), 3), "vz": round(clamp(vz, -1, 1), 3), "arm": 1 if arm else 0}
 
 
-def mix(sp, gz_norm, cur, state=None):
+def mix(sp, gz_norm, cur, state=None, cap=CAP, lift_first=False, total=TOTAL_CAP):
     """One 50 Hz mixer tick (same maths as the firmware).
     sp = (vf, vs, yr, vz) in [-1,1]; gz_norm = measured yaw rate / YR_MAX; cur = (mL, mR, mS, mV).
     state: mutable dict holding the yaw-rate integrator ("yawI"); None = P only.
@@ -70,10 +70,13 @@ def mix(sp, gz_norm, cur, state=None):
         yaw_i = clamp(state.get("yawI", 0.0) + KI_YR * err * MIX_DT, -I_YR_MAX, I_YR_MAX)
         state["yawI"] = yaw_i
     diff = K_YR * err + yaw_i
-    tgt = (clamp(vf - diff, -CAP, CAP), clamp(vf + diff, -CAP, CAP), clamp(vs, -CAP, CAP), clamp(vz, -CAP, CAP))
+    tgt = (clamp(vf - diff, -cap, cap), clamp(vf + diff, -cap, cap), clamp(vs, -cap, cap), clamp(vz, -cap, cap))
     tot = sum(abs(t) for t in tgt)
-    if tot > TOTAL_CAP:
-        tgt = tuple(t * TOTAL_CAP / tot for t in tgt)
+    if tot > total and lift_first:                # height comes first: V keeps its duty, L/R/S share what is left of the budget
+        rest = tot - abs(tgt[3]); k = max(0.0, total - abs(tgt[3])) / rest if rest > 1e-9 else 0.0
+        tgt = (tgt[0] * k, tgt[1] * k, tgt[2] * k, tgt[3])
+    elif tot > total:
+        tgt = tuple(t * total / tot for t in tgt)
     return tuple(c + clamp(t - c, -SLEW, SLEW) for c, t in zip(cur, tgt))
 
 

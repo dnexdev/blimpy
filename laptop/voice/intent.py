@@ -104,7 +104,25 @@ FAST = [
 ]
 
 
+MOVE_RE = re.compile(r"\b(mov\w*|go(ing)?|drift\w*|slid\w*|shift\w*|scoot\w*|float\w*|fly(ing)?|nudg\w*|step\w*|come|back up)\b.*?\b(left|right|forwards?|ahead|back(wards?)?)\b")
+MOVE_WORD = {"forwards": "forward", "ahead": "forward", "backward": "back", "backwards": "back"}
+
+
+def move_intent(t):
+    """"would you mind moving to the left for me slightly" -> nudge left. A direction after a verb of motion is not nuance:
+    it acts at any sentence length ("turn left" is a rotation and has no such verb)."""
+    if re.search(r"\bback (up|off|away)\b", t): return {"intent": "nudge", "move": "back", "metres": 0.5, "reply": "Backing up."}
+    m = MOVE_RE.search(t)
+    if not m or re.search(r"\b(turn|rotate|spin)\b", t): return None
+    w = m.group(4); w = MOVE_WORD.get(w, w)
+    far = 1.0 if re.search(r"\b(lot|far|more|metre|meter)\b", t) else 0.5
+    return {"intent": "nudge", "move": w, "metres": far, "reply": f"Moving {w}."}
+
+
 def fast_intent(text):
+    t0 = " " + re.sub(r"[^a-z0-9 ]", " ", text.lower()) + " "
+    mv = move_intent(t0)
+    if mv is not None and not re.search(r"\b(don t|do not|stop|never)\b", t0): return mv
     if len(text.split()) > 6:                         # long sentences carry nuance -> model
         return None
     t = " " + re.sub(r"[^a-z0-9 ]", " ", text.lower()) + " "

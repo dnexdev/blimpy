@@ -248,10 +248,13 @@ class SimTransport(Transport):
 
 # ---------------------------------------------------------------------------------------------------- the bridge
 class Bridge:
-    onboard, board = None, {}          # defaults for a Bridge built without __init__ (tests)
+    onboard, board, yaw_hold, motor_cap, lift_first, total_cap = None, {}, True, None, False, None   # defaults for a Bridge built without __init__ (tests)
 
-    def __init__(self, transport, http_port=None, log=print, telem_hz=20):
-        self.tr, self.log = transport, log
+    def __init__(self, transport, http_port=None, log=print, telem_hz=20, yaw_hold=True, motor_cap=None, lift_first=False, total_cap=None):
+        self.total_cap = total_cap                                     # laptop mixer only: budget for the SUM of the duties (None = protocol.TOTAL_CAP)
+        self.lift_first = lift_first                                   # laptop mixer only: V keeps its duty when the supply budget binds
+        self.motor_cap = motor_cap                                     # laptop mixer only: per-motor duty cap (None = protocol.CAP)
+        self.tr, self.log, self.yaw_hold = transport, log, yaw_hold   # yaw_hold False: the laptop mixer leaves the gyro out (L/R only on command)
         self.cmd_in, self.out = UdpJson(CMD_PORT), UdpJson()
         self.sp, self.arm, self.rx_t, self.sender = (0.0, 0.0, 0.0, 0.0), False, None, None
         self.cur, self.mix_state, self.armed = (0.0, 0.0, 0.0, 0.0), {"yawI": 0.0}, False
@@ -346,8 +349,10 @@ class Bridge:
             self.cur = from_pct({"C": b.get("mc", 0), "D": b.get("md", 0), "E": b.get("me", 0), "F": b.get("mf", 0)}) if ok else (0.0, 0.0, 0.0, 0.0)
             self.mix_state["yawI"] = 0.0
         elif ok:
-            fresh = self.imu_fresh(t)
-            self.cur = mix(self.sp, (self.gz / YR_MAX) if fresh else 0.0, self.cur, self.mix_state if fresh else None)
+            fresh = self.yaw_hold and self.imu_fresh(t)
+            self.cur = mix(self.sp, (self.gz / YR_MAX) if fresh else 0.0, self.cur, self.mix_state if fresh else None,
+                           lift_first=self.lift_first, **({} if self.motor_cap is None else {"cap": self.motor_cap}),
+                           **({} if self.total_cap is None else {"total": self.total_cap}))
             if not fresh: self.mix_state["yawI"] = 0.0
         else:
             self.cur, self.mix_state["yawI"] = (0.0, 0.0, 0.0, 0.0), 0.0
@@ -446,6 +451,13 @@ def main():
     ap.add_argument("--probe", action="store_true", help="print raw IMU lines for 10 s, then the rate verdict, and exit")
     ap.add_argument("--motor", nargs=2, metavar=("LETTER", "PCT"), help="bench: run one motor for --secs seconds (default 2), then STOP")
     ap.add_argument("--secs", type=float, default=2.0, help="with --motor: run time in seconds; 10-15 gives time to hold a meter on the driver")
+    ap.add_argument("--motor-cap", type=float, default=None, metavar="DUTY", help="laptop mixer only: per-motor duty cap, 0..1 (default protocol.CAP 0.5). "
+                    "1.0 lets hover.py --onoff run the lift motor flat out; the sum over the motors stays under TOTAL_CAP")
+    ap.add_argument("--total-cap", type=float, default=None, metavar="SUM", help="laptop mixer only: budget for the sum of the four duties (default "
+                    "protocol.TOTAL_CAP 1.2, set for a tired battery). Raise it only as far as the supply holds up: a brown-out drops the Bluetooth link")
+    ap.add_argument("--lift-first", action="store_true", help="laptop mixer only: when the shared-supply budget binds, the lift motor keeps its duty and "
+                    "the other three share what is left (default: all four scaled alike)")
+    ap.add_argument("--no-yaw-hold", action="store_true", help="laptop mixer only: no gyro yaw-rate loop, so L/R stay off unless commanded (hover.py: the lift motor alone)")
     ap.add_argument("--no-http", action="store_true"); ap.add_argument("--imu-log", action="store_true", help="append samples to data/imu.jsonl")
     args = ap.parse_args()
 
@@ -486,7 +498,8 @@ def main():
             print(probe_verdict(got, max(0.5, time.monotonic() - t1)))
         tr.close(); tr.wait_closed(5.0); return          # a clean disconnect, so the box goes back to advertising at once
 
-    br = Bridge(tr, http_port=None if args.no_http else B["HTTP_PORT"])
+    br = Bridge(tr, http_port=None if args.no_http else B["HTTP_PORT"], yaw_hold=not args.no_yaw_hold, lift_first=args.lift_first, total_cap=args.total_cap,
+                motor_cap=None if args.motor_cap is None else clamp(args.motor_cap, 0.0, 1.0))
     print(f"[bridge] udp {CMD_PORT} -> {'simulated robot' if args.fake else 'BLE ' + (args.name or B['NAME'])} -> telemetry on {TELEM_PORT}"
           + ("" if args.no_http else f"   http://127.0.0.1:{B['HTTP_PORT']}/imu  /status") + "   (Ctrl+C = STOP + quit)")
     print(f"[bridge] motor map {map_line()[4:]}   from {B.get('MAP_SOURCE')}")

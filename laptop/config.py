@@ -246,6 +246,7 @@ FOLLOW = dict(
                           # mixer the bridge only says armed:1 once the BOX reports it is flying, and the box talks every 200 ms:
                           # up to ~6 frames of armed:0 right after arming are normal, 12 (0.6 s) is a box that really did not take it
     AGE_WARN_MS=300,      # the board's 'ms since last command' above this -> print a link warning (its failsafe trips at 500)
+    NUDGE_MAX_S=6.0,      # s a "move left / right / forward / back" body push lasts at most (it ends earlier once the camera saw the distance)
     NUDGE_S=3.0, NUDGE_VF=0.3,   # heading-calibration nudge on first arm: fly forward, learn heading from the response
     TWITCH_S=2.5, TWITCH_AFTER_S=40,   # re-learn heading with a short forward push after this long without a manoeuvre (2.0 until
                           # the CMD_TAU_S low-pass: the rounded push must carry the same thrust-time for the learner)
@@ -253,4 +254,29 @@ FOLLOW = dict(
     STANDOFF_ME=1.1, STANDOFF_PLACE=0.25, ARRIVE_M=0.2,   # "come here" stops 1.1 m from the person; places 0.25 m; arrived within +ARRIVE_M
     HOLD_DEADBAND=0.08, HOLD_V_MAX=0.3,   # hover = hold POSITION (gusts and the twitch would otherwise walk it away)
     HZ=15,
+)
+
+# --- Height hold alone (laptop/control/hover.py): only the V motor runs, so it may use the whole per-motor cap of the box
+#     (MIX_CAP 0.5; the shared-supply budget never binds with L/R/S at zero). The balloon LEAKS: the weight the fan has to
+#     carry grows all the time, so the trim integrator gets nearly the whole range instead of FOLLOW's +-12 %.
+#     u is thrust in units of the cap thrust, so a larger cap is a larger loop gain: the FOLLOW gains are scaled back by
+#     the cap ratio and the height loop stays the one that was tuned. ---
+_HOVER_CAP = 0.5
+_k = FOLLOW["VZ_CAP"] / _HOVER_CAP
+HOVER = dict(FOLLOW,
+    VZ_CAP=_HOVER_CAP,
+    K_Z=FOLLOW["K_Z"] * _k, K_VZ=FOLLOW["K_VZ"] * _k, Z_KI=FOLLOW["Z_KI"] * _k,
+    Z_I_MAX=0.85 * _HOVER_CAP,    # thrust fraction the trim may hold; the rest is left for P and D
+    ON_DUTY=1.0,                  # hover.py --onoff: the fan is either at this duty or off (needs the bridge's --motor-cap at least this high)
+    VZ_WIN_S=0.8,                 # s of camera fixes the height / vertical-speed line is fitted through (hover.py ZTrack)
+    Z_GATE_M=0.25,                # a fix this far from the median of that window is a wrong box: left out
+    ONOFF=True,                   # the fan is flat out or off (altitude.LiftHold); False = AltHold's P + I + D
+    DROP_WIN_S=0.4,               # s, the short look that catches a drop early
+    DROP_V=0.06,                  # m/s downward that counts as dropping: the fan goes on at once
+    DROP_MARGIN_M=0.05,           # ... unless the balloon is still this far ABOVE its target (coming down on purpose)
+    LAT_S=0.4,                    # s from a height change to the fan answering it (camera ~0.13 + Bluetooth + mixer slew + spin-up)
+    A_ON0=0.05, A_OFF0=-0.03,     # m/s^2 up with the fan on / down with it off: first guesses only, measured in flight from then on
+    A_MIN=0.005, A_MAX=0.3, LEARN_MIN_S=1.0, LEARN_K=0.3,
+    ONOFF_MIN_S=0.6,              # hover.py --onoff: shortest time the fan stays on (or off) once switched
+    TRIM_SAT_S=5.0,               # s the trim sits at its clamp before hover.py says the fan cannot carry the balloon
 )

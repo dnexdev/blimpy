@@ -18,6 +18,8 @@ F = config.FPV
 REV_EFF = config.PHYS["REV_EFF"]
 
 
+NEEDS_HEADING = ("FOLLOW", "GO_TO", "WANDER")   # modes that steer in the room. HOVER / NUDGE / ROTATE / DANCE run without one: no blind
+                                                # heading pushes while Blimpy is only asked to stay put (they looked like random moves, 2026-09-20)
 NUDGE_DIRS = {"forward": (1.0, 0.0), "back": (-1.0, 0.0), "backward": (-1.0, 0.0), "left": (0.0, 1.0), "right": (0.0, -1.0)}   # body frame: +x ahead, +y left
 
 
@@ -34,6 +36,7 @@ class Behaviors:
         self.home = None                                    # set on arm
         self.goto_target = "me"
         self.z_offset = 0.0
+        self.nudge = None                                   # heading-free body push in progress (mode NUDGE)
         self.alt = AltHold()
         self.rotate_left = 0.0; self.rotate_dir = 1; self.rotate_prev = None; self.rotate_acc = 0.0; self.rotate_t0 = 0.0; self.rotate_tp = 0.0
         self.wander_wp = None; self.wander_t = 0.0
@@ -151,9 +154,13 @@ class Behaviors:
             # sent go_to target "forward" (not a place), which silently meant "fly to the speaker"; such targets land here.
             move = it.get("move") or it.get("target") or "forward"
             if move not in NUDGE_DIRS: return "Which way: forward, back, left or right?"
-            if getattr(est, "rel", False) or est.p is None or est.psi is None or not getattr(est, "head_confident", True):
-                return "I'm not sure which way I'm facing yet. Give me a moment, or ask me to follow you."
             d = clamp(float(it.get("metres", 0.5) or 0.5), 0.1, 2.0)
+            if est.p is None: return "I can't see myself right now."
+            if getattr(est, "rel", False) or est.psi is None or not getattr(est, "head_confident", True):
+                # Blimpy's own left IS a body direction: the sideways motor pushes that way whatever the heading is. Push until the
+                # room camera has seen it travel d metres (any direction), or the time is up; then hold.
+                self._set("NUDGE"); self.nudge = dict(dir=NUDGE_DIRS[move], p0=(est.p[0], est.p[1]), d=d, t0=self.now(), move=move)
+                return reply
             fx, fy = NUDGE_DIRS[move]; c, s = math.cos(est.psi), math.sin(est.psi)
             self._set("HOVER")
             self.hold_xy = (est.p[0] + d * (fx * c - fy * s), est.p[1] + d * (fx * s + fy * c))     # body -> world; avoid() still keeps it off the walls
@@ -217,7 +224,16 @@ class Behaviors:
         self.v_tw = self._twitch(est, now)
         kw["v_extra"] = kwp["v_extra"] = self.v_tw
         hold_z = True
-        if est.psi is not None and not confident and not rel:
+        if self.mode == "NUDGE":
+            n = self.nudge; fx, fy = n["dir"]
+            gone = math.hypot(est.p[0] - n["p0"][0], est.p[1] - n["p0"][1])
+            if gone >= n["d"] or now - n["t0"] > G["NUDGE_MAX_S"]:
+                self._set("HOVER")
+            else:
+                push = {(1.0, 0.0): self.ACQ_DIRS[0], (-1.0, 0.0): self.ACQ_DIRS[1], (0.0, 1.0): self.ACQ_DIRS[2], (0.0, -1.0): self.ACQ_DIRS[3]}[(fx, fy)]
+                vf, vs = self._smooth(push[0], push[1], now)           # the same body pushes the heading learner uses (~equal acceleration)
+                return vf, vs, 0.0, self.alt.cmd(z_target, est, now), f"NUDGE {n['move']} {gone:.2f}/{n['d']:.2f} m"
+        if est.psi is not None and not confident and not rel and self.mode in NEEDS_HEADING:
             # the person is a wall too for the blind pushes; a body is ~0.2 m across here (0.35 is the follow-dodge margin, and
             # with it a balloon starting 1.2 m from the person had every second push cut short and gave up on a wrong heading)
             obs_acq = self.obstacles + ([(self.person[0], self.person[1], 0.2)] if person_ok else [])

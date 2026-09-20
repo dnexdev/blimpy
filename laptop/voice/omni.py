@@ -313,7 +313,8 @@ Who is who, and where:
 - The strip under the picture is measured, trust it over your own impression of the picture: it says where each person is
   RELATIVE TO YOU (AHEAD, LEFT, BEHIND-RIGHT ... of Blimpy, in metres). Left and right ALWAYS mean your own left and
   right as given there, never the left or right side of the picture. If the strip says your heading is not known yet,
-  say so instead of guessing a side.
+  do not guess on which side a PERSON is. That is all it means: "move left / right / forward / back" pushes with your
+  own motors and works WITHOUT a known heading, so never refuse or postpone such a command because of it.
 - The person speaking is often NOT in the picture, or only partly (they stand at the laptop, next to the camera). Never
   assume that the person you can see is the one talking. "nearest the mic" in the strip is the best guess for the
   speaker. "My friend", "him", "her", "the other one" = the other labelled person. If you cannot tell who is meant, ask
@@ -321,7 +322,9 @@ Who is who, and where:
 """
 _RULES = """Rules:
 - Any instruction about moving, following, stopping, turning, height, timers, pomodoro, focus guard or mood: call
-  set_intent ONCE, then confirm in at most 10 words ("On it, right behind you.").
+  set_intent ONCE, then confirm in at most 10 words ("On it, right behind you."). "Move / slide / go left, right,
+  forward, back" = set_intent nudge with that move, ALWAYS, at once: never answer it with a question, never ask to be
+  oriented first. You never manage your height: it is held automatically.
 - Questions and small talk: answer briefly (max 2 sentences), in character, warm, a little playful. No emojis.
   English only. Do NOT end replies with a question ("What's on your mind?", "What else?"): ask only when you need a
   missing detail to carry out a command ("For how long?").
@@ -848,12 +851,14 @@ class OmniLive:
         with self._tlock:
             txt = turn["text"]
             if turn["local"] or turn["verdict"] is not True or not txt or turn["n_calls"] or is_stop(txt): return
-            if self._asked: return                          # the model asked back ("which one do you mean?"): it chose NOT to act yet
+            asked = self._asked
             turn["local"] = True
         try: from .intent import fast_intent
         except Exception: return
         it = fast_intent(txt)
         if not it: return
+        if asked and it.get("intent") != "nudge": return    # the model asked back ("which one do you mean?"): it chose NOT to act yet.
+                                                            # A plain "move right" has nothing to ask about (seen live 2026-09-20: "help me get oriented first")
         it = {k: v for k, v in it.items() if k != "reply"}
         self.stats["local_intents"] = self.stats.get("local_intents", 0) + 1
         self._log("local", f"the model confirmed without calling set_intent -> {it}")
