@@ -3,6 +3,7 @@ from bleak import BleakScanner, BleakClient
 
 SERVICE = "12345678-1234-1234-1234-123456789000"
 COMMAND = "12345678-1234-1234-1234-123456789001"
+P_REPORT = "12345678-1234-1234-1234-123456789003"
 
 async def main():
     print("Finding ESP32...")
@@ -26,6 +27,8 @@ CONNECTED — enter commands:
   ALL 20                All motors at 20%
   MOTORS 10 20 30 40     Set C D E F individually
   STOP                  Stop all motors
+  C_HOLD                Start IMU damping with adaptive P (c_hold sketch)
+  C_HOLD P              Show current P and rolling IMU window status
   QUIT                  Stop and disconnect
 """)
         try:
@@ -33,6 +36,15 @@ CONNECTED — enter commands:
                 command = (await asyncio.to_thread(input, "> ")).strip().upper()
                 if command == "QUIT":
                     break
+                if command == "C_HOLD P":
+                    # The sketch refreshes this snapshot every 200 ms. Reading
+                    # it avoids racing the queued command-processing callback.
+                    if client.services.get_characteristic(P_REPORT) is None:
+                        print("P report unavailable: flash the updated c_hold sketch.")
+                    else:
+                        report = await client.read_gatt_char(P_REPORT)
+                        print(report.decode("utf-8", errors="replace"))
+                    continue
                 if command:
                     await client.write_gatt_char(
                         COMMAND, command.encode(), response=True
