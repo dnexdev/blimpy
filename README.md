@@ -18,6 +18,7 @@ laptop/voice/        stt.py (whisper) · intent.py (local LLM -> JSON intents) �
                      addressee.py (who is that for: cues + room + judge) · session_rec.py (keeps each session) · voiceprint.py (speaker-embedding measurement)
 tools/calib/         make_targets.py · intrinsics.py · extrinsics.py · triangulate_test.py · record_clips.py
 tools/dataset/       build_balloon_dataset.py · label_site.py · extract_frames.py
+fly.py               ONE command for the demo: camera + bridge + pilot, auto-arm, clean stop (section 0b). fly.sh = nex's Mac version
 tools/               motor_map.py (which letter is which motor) · bridge_test.py · control_test.py · vision_test.py · people_test.py · scene_test.py · positioning_test.py · intent_test.py
                      omni_test.py (offline) · omni_live_test.py · addressee_backtest.py (replay recorded sessions, no key) · omni_report.py (sponsor usage report)
                      webcam_test.py · balloon_eval.py · vision_check.py (go/no-go) · positioning_eval.py (sessions vs truth)
@@ -56,6 +57,22 @@ state, the map) while the bridge runs; the same data in Python via `laptop.contr
 left the repo on 2026-09-19, git history before `de42b4c`; `--esp` still says where commands go.)
 
 **Network rule:** phones and Pis join the *laptop's hotspot*, never the hackathon WiFi. The gondola is on Bluetooth.
+
+## 0b. The demo, one command
+
+```powershell
+python fly.py                 # camera + Bluetooth bridge + the pilot with the voice; it arms by itself 8 s after the camera sees the balloon
+python fly.py hover           # the height-only test instead of the pilot (laptop/control/hover.py: only the lift motor runs)
+python fly.py --voice local   # anything else goes to the pilot: --no-voice, --mic AirPods --spk Speakers ...
+python fly.py status          # what is running          python fly.py stop   # stop a bridge / camera left behind (clean STOP + disconnect)
+```
+Before it: box on and held still 5 s, mat on the floor in the webcam's view with the balloon above it, balloon trimmed
+a little HEAVY (sinks to the floor in ~5 s with the motors off). `fly.py` starts the bridge and the camera as children
+of that window (output in `data/logs/fly_*.log`), waits for the box and for a picture, prints which firmware and which
+motor map it found, then runs the pilot in the foreground. ESC quits the pilot; Enter flies again without a new
+Bluetooth scan; `q` (or Ctrl+C) stops everything, the bridge through its `/quit` endpoint so the box gets STOP and a
+clean disconnect. `python fly.py sim` runs the same plumbing on the archived simulator (no robot, no camera).
+nex's `fly.sh` is the same thing for a Mac shell.
 
 ## 1. The control stack, and the tests that need no hardware
 

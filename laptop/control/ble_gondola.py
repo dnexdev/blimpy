@@ -414,7 +414,7 @@ class Bridge:
             if self.http: self.http.shutdown()
             self.tr.wait_closed(5.0)
 
-    # ---- localhost HTTP: GET /imu  /imu/history?n=200  /status
+    # ---- localhost HTTP: GET /imu  /imu/history?n=200  /status  /quit
     def _serve_http(self, port):
         bridge = self
 
@@ -426,6 +426,8 @@ class Bridge:
                 if path == "/imu": body = imu_store.latest()
                 elif path == "/imu/history": body = imu_store.history(n=int(q.get("n", 200)))
                 elif path == "/status": body = bridge.status()
+                elif path == "/quit":                        # fly.py: the clean way out (STOP x3, disconnect, wait for it), not a kill
+                    bridge.stop.set(); body = {"quitting": True}
                 else: self.send_response(404); self.end_headers(); return
                 data = json.dumps(body).encode()
                 self.send_response(200); self.send_header("Content-Type", "application/json")
