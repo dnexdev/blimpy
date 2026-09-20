@@ -5,6 +5,9 @@
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <BLE2902.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
+#include <atomic>
 
 
 // ============================================================
@@ -65,7 +68,19 @@ constexpr int FPWM = 21;
 
 BLECharacteristic* telemetryCharacteristic = nullptr;
 
-bool deviceConnected = false;
+std::atomic<bool> deviceConnected{false};
+std::atomic<bool> connectPending{false};
+std::atomic<bool> disconnectPending{false};
+std::atomic<bool> commandOverflow{false};
+std::atomic<uint32_t> connectionGeneration{0};
+
+struct QueuedCommand {
+  uint32_t generation;
+  char text[128];
+};
+QueueHandle_t commandQueue = nullptr;
+bool restartAdvertisingPending = false;
+unsigned long restartAdvertisingAt = 0;
 
 
 // ============================================================
@@ -787,13 +802,13 @@ void motorD(
 // ============================================================
 
 void allOff() {
+  // Stop local motors before attempting I2C.
+  motorE(0);
+  motorF(0);
   motorCValue = 0;
   motorDValue = 0;
 
   sendSlaveMotors();
-
-  motorE(0);
-  motorF(0);
 }
 
 
@@ -815,6 +830,7 @@ void scanMotorSlave() {
     addr < 127;
     addr++
   ) {
+    if (disconnectPending.load()) return;
     Wire.beginTransmission(
       addr
     );
@@ -1150,77 +1166,91 @@ void processCommand(
 // BLE SERVER CALLBACKS
 // ============================================================
 
-class ServerCallbacks
-  : public BLEServerCallbacks {
-
-  void onConnect(
-    BLEServer* server
-  ) override {
-    deviceConnected = true;
-
-    Serial.println(
-      "BLE connected"
-    );
+// BLE callbacks only publish state or queue commands. Hardware and logging
+// run in loop(), so an I2C transaction cannot hold up a Bluetooth callback.
+class ServerCallbacks : public BLEServerCallbacks {
+  void onConnect(BLEServer* server) override {
+    connectionGeneration.fetch_add(1);
+    deviceConnected.store(true);
+    connectPending.store(true);
   }
 
-
-  void onDisconnect(
-    BLEServer* server
-  ) override {
-    deviceConnected = false;
-
-
-    // Safety
-    allOff();
-
-
-    Serial.println(
-      "BLE disconnected -> ALL MOTORS OFF"
-    );
-
-
-    BLEDevice::startAdvertising();
+  void onDisconnect(BLEServer* server) override {
+    deviceConnected.store(false);
+    connectionGeneration.fetch_add(1);
+    disconnectPending.store(true);
   }
 };
 
+class CommandCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic* characteristic) override {
+    if (!deviceConnected.load() || commandQueue == nullptr) return;
+    auto value = characteristic->getValue();
+    if (value.length() == 0) return;
 
-// ============================================================
-// BLE COMMAND CALLBACK
-// ============================================================
-
-class CommandCallbacks
-  : public BLECharacteristicCallbacks {
-
-  void onWrite(
-    BLECharacteristic* characteristic
-  ) override {
-    String command =
-      characteristic
-        ->getValue();
-
-
-    if (
-      command.length() == 0
-    ) {
+    QueuedCommand command{};
+    if (value.length() >= sizeof(command.text)) {
+      commandOverflow.store(true);
       return;
     }
-
-
-    Serial.print(
-      "BLE -> "
-    );
-
-    Serial.println(
-      command
-    );
-
-
-    // BLE and Serial use exact same command system
-    processCommand(
-      command
-    );
+    command.generation = connectionGeneration.load();
+    memcpy(command.text, value.c_str(), value.length());
+    if (xQueueSend(commandQueue, &command, 0) != pdTRUE) {
+      commandOverflow.store(true);
+    }
   }
 };
+
+void handleBLEEvents() {
+  if (disconnectPending.exchange(false)) {
+    xQueueReset(commandQueue);
+    allOff();
+    Serial.println("BLE disconnected -> ALL MOTORS OFF");
+    restartAdvertisingPending = true;
+    restartAdvertisingAt = millis() + 200;
+  }
+  if (commandOverflow.exchange(false)) {
+    xQueueReset(commandQueue);
+    allOff();
+    Serial.println("BLE command too long or queue full -> ALL MOTORS OFF");
+  }
+  if (connectPending.exchange(false)) {
+    Serial.println("BLE connected");
+  }
+  if (restartAdvertisingPending &&
+      (int32_t)(millis() - restartAdvertisingAt) >= 0) {
+    restartAdvertisingPending = false;
+    if (!deviceConnected.load()) {
+      BLEDevice::startAdvertising();
+      Serial.println("BLE advertising restart requested");
+    }
+  }
+}
+
+// Do not wait for a newline: loop() must keep servicing disconnect events.
+void handleSerialCommands() {
+  static char buffer[128];
+  static size_t length = 0;
+  static bool overflow = false;
+  for (int count = 0; count < 64 && Serial.available(); ++count) {
+    char ch = (char)Serial.read();
+    if (ch == '\r' || ch == '\n') {
+      if (overflow) {
+        Serial.println("Serial command too long; discarded");
+      } else if (length) {
+        buffer[length] = '\0';
+        processCommand(String(buffer));
+      }
+      length = 0;
+      overflow = false;
+      return;
+    }
+    if (!overflow) {
+      if (length < sizeof(buffer) - 1) buffer[length++] = ch;
+      else overflow = true;
+    }
+  }
+}
 
 
 // ============================================================
@@ -1326,7 +1356,7 @@ void initBLE() {
 // ============================================================
 
 constexpr unsigned long
-  TELEMETRY_INTERVAL_MS = 20;
+  TELEMETRY_INTERVAL_MS = 200;
 
 unsigned long lastTelemetry = 0;
 
@@ -1486,6 +1516,7 @@ void setup() {
     SLAVE_SCL,
     100000
   );
+  Wire.setTimeOut(25);
 
 
   Serial.println(
@@ -1558,6 +1589,12 @@ void setup() {
   // BLE
   // ==========================================================
 
+  commandQueue = xQueueCreate(12, sizeof(QueuedCommand));
+  if (commandQueue == nullptr) {
+    allOff();
+    Serial.println("Cannot allocate BLE command queue");
+    while (true) delay(1000);
+  }
   initBLE();
 
 
@@ -1580,7 +1617,7 @@ void setup() {
   );
 
   Serial.println(
-    "IMU -> BLE at 50 Hz"
+    "IMU BLE telemetry disabled for connection debugging"
   );
 
   Serial.println();
@@ -1629,24 +1666,16 @@ void setup() {
 // ============================================================
 
 void loop() {
-  // ==========================================================
-  // SERIAL COMMANDS
-  // ==========================================================
-
-  if (
-    Serial.available()
-  ) {
-    String command =
-      Serial.readStringUntil(
-        '\n'
-      );
-
-
-    processCommand(
-      command
-    );
+  handleBLEEvents();
+  QueuedCommand command{};
+  if (xQueueReceive(commandQueue, &command, 0) == pdTRUE &&
+      deviceConnected.load() && !disconnectPending.load() &&
+      command.generation == connectionGeneration.load()) {
+    processCommand(String(command.text));
   }
-
+  handleBLEEvents();
+  handleSerialCommands();
+  handleBLEEvents();
 
   // ==========================================================
   // IMU TELEMETRY @ 50 Hz
@@ -1665,7 +1694,7 @@ void loop() {
       now;
 
 
-    sendTelemetry();
+    // sendTelemetry();
   }
 
 

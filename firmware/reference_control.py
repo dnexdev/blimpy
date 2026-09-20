@@ -1,54 +1,50 @@
-"""Reference BLE controller for esp32_master.ino; run this on the laptop.
-
-Use the service discovery and command writes here as a reference when integrating
-the master ESP32 into the main control code.
-"""
-
 import asyncio
 from bleak import BleakScanner, BleakClient
 
-SERVICE_UUID = "12345678-1234-1234-1234-123456789000"
-COMMAND_UUID = "12345678-1234-1234-1234-123456789001"
+SERVICE = "12345678-1234-1234-1234-123456789000"
+COMMAND = "12345678-1234-1234-1234-123456789001"
 
 async def main():
-    print("Scanning...")
-
+    print("Finding ESP32...")
     device = await BleakScanner.find_device_by_filter(
-        lambda d, adv:
-            SERVICE_UUID.lower()
-            in [u.lower() for u in adv.service_uuids],
-        timeout=10.0
+        lambda d, a: SERVICE in [u.lower() for u in a.service_uuids],
+        timeout=20,
     )
 
     if device is None:
-        print("BalloonRobot service not found")
+        print("Not found. Close other BLE scripts and retry.")
         return
 
-    print(f"Found: {device.name} {device.address}")
-
     async with BleakClient(device) as client:
-        print("Connected:", client.is_connected)
+        await client.write_gatt_char(COMMAND, b"STOP", response=True)
+        print("""
+CONNECTED — enter commands:
+  C 40                  Motor C forward at 40%
+  D -40                 Motor D reverse at 40%
+  E 30                  Motor E forward at 30%
+  F 30                  Motor F forward at 30%
+  ALL 20                All motors at 20%
+  MOTORS 10 20 30 40     Set C D E F individually
+  STOP                  Stop all motors
+  QUIT                  Stop and disconnect
+""")
+        try:
+            while client.is_connected:
+                command = (await asyncio.to_thread(input, "> ")).strip().upper()
+                if command == "QUIT":
+                    break
+                if command:
+                    await client.write_gatt_char(
+                        COMMAND, command.encode(), response=True
+                    )
+                    print("Sent:", command)
+        finally:
+            if client.is_connected:
+                await client.write_gatt_char(COMMAND, b"STOP", response=True)
 
-        print("Commands:")
-        print("C 40")
-        print("D 40")
-        print("E 40")
-        print("F 40")
-        print("ALL 30")
-        print("MOTORS 20 30 -10 0")
-        print("STOP")
-
-        while True:
-            command = input("> ").strip()
-
-            if not command:
-                continue
-
-            await client.write_gatt_char(
-                COMMAND_UUID,
-                command.encode(),
-                response=False
-            )
-
-if __name__ == "__main__":
+try:
     asyncio.run(main())
+except KeyboardInterrupt:
+    print("\nStopped")
+except Exception as e:
+    print("Error:", e)

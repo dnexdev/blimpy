@@ -13,6 +13,28 @@ python firmware/reference_control.py
 Run this command from the repository root. Install the required `bleak` package
 first with `python -m pip install bleak` if it is not already installed.
 
+Run the file from PowerShell or a terminal, not by repeatedly pasting it into
+the Python `>>>` prompt. Type `QUIT` to send STOP and disconnect. Console input
+runs separately so BLE callbacks keep running while you type.
+
+### BLE connection recovery
+
+The master supports the built-in Arduino ESP32 BLE library with either Bluedroid
+or NimBLE. Advertising is checked using Bluedroid GAP completion events or NimBLE's
+advertising state and retried every second while disconnected
+if starting it fails. The service UUID is in the advertising packet and the full
+device name is in the scan response. Notification subscription state is cleared
+for each connection. The master supports MTU 185 and skips IMU notifications that
+do not fit the client's negotiated MTU; it logs when a larger MTU is needed.
+The current telemetry interval is 200 ms (5 Hz), only while subscribed.
+
+Serial Monitor at 115200 now shows `Boot reset reason=...`,
+`BLE disconnected` (with a reason code on Bluedroid), and
+`BLE advertising start status=...` (0 means
+success). These distinguish a board reboot from a dropped link or an advertising
+failure. After flashing, restart the Python process to clear callbacks left over
+from previous interrupted interactive sessions. Use only one BLE client at a time.
+
 The script finds the master by its advertised service UUID, connects, and sends
 typed commands such as `C 40`, `ALL 30`, `MOTORS 20 30 -10 0` (C, D, E, F order),
 or `STOP`. Motor values are signed percentages from -100 to 100.
@@ -83,7 +105,7 @@ IN2 = GPIO 20
 PWM = GPIO 21
 ```
 
-Because ESP32-C3 has one hardware I2C controller, the current master design uses hardware `Wire` on GPIO8/9 for the slave and a software/bit-banged I2C implementation on GPIO0/1 for the MPU6050. The MPU is read and streamed over BLE at **50 Hz** using a 20 ms telemetry interval. The user later asked to disable the IMU’s Serial spam while keeping BLE telemetry active, so Serial should ideally only show useful events such as startup, BLE connection state, motor commands, I2C status, scan/debug output, and errors.
+Because ESP32-C3 has one hardware I2C controller, the current master design uses hardware `Wire` on GPIO8/9 for the slave and a software/bit-banged I2C implementation on GPIO0/1 for the MPU6050. The MPU is read and streamed over BLE at **5 Hz** using a 200 ms telemetry interval while the client is subscribed. The user later asked to disable the IMU’s Serial spam while keeping BLE telemetry active, so Serial should ideally only show useful events such as startup, BLE connection state, motor commands, I2C status, scan/debug output, and errors.
 
 BLE is only on the master. The intended BLE device name is:
 ```text
