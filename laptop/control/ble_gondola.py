@@ -54,6 +54,7 @@ class Transport:
     def start(self): return self
     def send(self, text): raise NotImplementedError
     def close(self): pass
+    def wait_closed(self, timeout=5.0): return True
 
 
 def lines_of(data):
@@ -87,10 +88,20 @@ class BleakTransport(Transport):
         self.name = name; self.log = log              # optional extra filter; discovery normally needs no device name
         self.loop = asyncio.new_event_loop(); self.q = None; self.client = None
         self.stopping = False; self.last_error = None; self.address = None
+        self.done = threading.Event()                  # set once the link is closed for good (see wait_closed)
 
     def start(self):
-        threading.Thread(target=self.loop.run_until_complete, args=(self._main(),), daemon=True, name="ble").start()
+        threading.Thread(target=self._thread, daemon=True, name="ble").start()
         return self
+
+    def _thread(self):
+        try: self.loop.run_until_complete(self._main())
+        finally: self.done.set()
+
+    def wait_closed(self, timeout=5.0):
+        """After close(): block until bleak has really disconnected. Leaving the process mid-disconnect keeps Windows holding
+        the link, and a box that still thinks it is connected does not advertise: the next run finds nothing."""
+        return self.done.wait(timeout)
 
     async def _main(self):
         from bleak import BleakClient, BleakScanner
@@ -211,6 +222,7 @@ class SimTransport(Transport):
 
     def drop(self): self._dropped = True
     def close(self): self.stopping = True
+    def wait_closed(self, timeout=5.0): time.sleep(0.2); return True
 
 
 # ---------------------------------------------------------------------------------------------------- the bridge
@@ -332,6 +344,7 @@ class Bridge:
                 self.tr.send("STOP"); time.sleep(0.05)
             self.tr.close(); self._unsub()
             if self.http: self.http.shutdown()
+            self.tr.wait_closed(5.0)
 
     # ---- localhost HTTP: GET /imu  /imu/history?n=200  /status
     def _serve_http(self, port):
@@ -408,7 +421,7 @@ def main():
             try: time.sleep(10.0)
             except KeyboardInterrupt: pass                      # Ctrl+C early: still print the verdict for what arrived
             print(probe_verdict(got, max(0.5, time.monotonic() - t1)))
-        tr.close(); time.sleep(0.5); return
+        tr.close(); tr.wait_closed(5.0); return          # a clean disconnect, so the box goes back to advertising at once
 
     br = Bridge(tr, http_port=None if args.no_http else B["HTTP_PORT"])
     print(f"[bridge] udp {CMD_PORT} -> {'simulated robot' if args.fake else 'BLE ' + (args.name or B['NAME'])} -> telemetry on {TELEM_PORT}"
