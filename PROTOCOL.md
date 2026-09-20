@@ -19,9 +19,7 @@ Telemetry is sent to whichever IP most recently sent a command.
 
 ## 1b. Gondola over Bluetooth LE (the hardware team's firmware)
 
-Discover by advertised service UUID `12345678-1234-1234-1234-123456789000`, matching
-`firmware/reference_control.py`; the device name `BalloonRobot` may be absent. `--name` optionally adds a name filter.
-Two GATT characteristics (UUIDs in `config.BLE`):
+Device name `BalloonRobot`, two GATT characteristics (UUIDs in `config.BLE`):
 - **command** (write without response), ASCII: `C 40` / `D -40` / `E 50` / `F 100` (one motor, percent, sign =
   direction), `ALL 30`, `MOTORS c d e f` (percent for motors C D E F), `STOP`.
 - **telemetry** (notify): one IMU text line per sample. The layout is the firmware's; `config.BLE` `IMU_FIELDS` /

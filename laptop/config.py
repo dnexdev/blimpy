@@ -78,7 +78,6 @@ ESP32_IP = "127.0.0.1"            # where the control programs send commands. Th
 # --- Gondola over Bluetooth LE (laptop/control/ble_gondola.py). The firmware takes per-motor PERCENTAGES as text. ---
 BLE = dict(
     NAME="BalloonRobot",
-    SERVICE_UUID="12345678-1234-1234-1234-123456789000",     # discover by advertised service, even when the device name is missing
     COMMAND_UUID="12345678-1234-1234-1234-123456789001",     # write: "C 40" | "ALL 30" | "MOTORS c d e f" | "STOP"
     TELEMETRY_UUID="12345678-1234-1234-1234-123456789002",   # notify: one IMU text line per sample
     MOTORS={"L": "C", "R": "D", "S": "E", "V": "F"},   # our motor -> firmware letter. VERIFY on the bench: ble_gondola --motor C 30

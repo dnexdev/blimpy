@@ -5,7 +5,7 @@ the firmware's per-motor percentages and turns the firmware's IMU lines back int
     udp 5005 command {vf,vs,yr,vz,arm} --> mixer (50 Hz, yaw-rate PI on the IMU) --> "MOTORS c d e f" over BLE (20 Hz)
     BLE IMU notifications -----------> laptop/control/imu_store (latest/history/subscribe, http :5008) --> udp 5006 telemetry
 
-  python -m laptop.control.ble_gondola                    # scan by service UUID, connect, bridge. Then run teleop / pilot as usual
+  python -m laptop.control.ble_gondola                    # scan for "BalloonRobot", connect, bridge. Then run teleop / pilot as usual
   python -m laptop.control.ble_gondola --fake --sim       # no hardware: same bridge on the simulated balloon (state on 5007)
   python -m laptop.control.ble_gondola --probe            # connect and print raw IMU lines for 10 s (set config.BLE IMU_FIELDS)
   python -m laptop.control.ble_gondola --motor C 30       # bench: one motor at 30 % for 2 s (--secs 10 for a meter), then STOP (which letter is which?)
@@ -84,7 +84,7 @@ class BleakTransport(Transport):
     """Real robot over BLE (bleak). Own asyncio loop on a thread; reconnects forever."""
 
     def __init__(self, name=None, log=print):
-        self.name = name; self.log = log              # optional extra filter; discovery normally needs no device name
+        self.name = name or B["NAME"]; self.log = log
         self.loop = asyncio.new_event_loop(); self.q = None; self.client = None
         self.stopping = False; self.last_error = None; self.address = None
 
@@ -97,22 +97,17 @@ class BleakTransport(Transport):
         self.q = asyncio.Queue()
         while not self.stopping:
             try:
-                self.log(f"[ble] scanning for service {B['SERVICE_UUID']}"
-                         + (f" with name {self.name!r}" if self.name else "") + "...")
-                dev = await BleakScanner.find_device_by_filter(
-                    lambda d, adv: B["SERVICE_UUID"].lower() in [u.lower() for u in (adv.service_uuids or [])]
-                    and (not self.name or self.name in (d.name, adv.local_name)),
-                    timeout=10.0,
-                )
+                self.log(f"[ble] scanning for {self.name!r}...")
+                dev = await BleakScanner.find_device_by_name(self.name, timeout=8.0)
                 if dev is None:
-                    self.last_error = "not found"; self.log("[ble] service not found (powered? in range? advertising the expected service?), retrying"); await asyncio.sleep(2); continue
+                    self.last_error = "not found"; self.log("[ble] not found (powered? in range? name changed?), retrying"); await asyncio.sleep(2); continue
                 self.address = dev.address
                 lost = asyncio.Event()
                 async with BleakClient(dev, disconnected_callback=lambda c: lost.set()) as client:
                     self.client = client
                     await client.start_notify(B["TELEMETRY_UUID"], lambda c, data: self.on_line and self.on_line(bytes(data)))
                     self.connected = True; self.connects += 1; self.last_error = None
-                    self.log(f"[ble] connected to {dev.name or B['NAME']} at {dev.address}")
+                    self.log(f"[ble] connected to {self.name} at {dev.address}")
                     while not lost.is_set() and not self.stopping:
                         try:
                             text = await asyncio.wait_for(self.q.get(), 0.25)
@@ -356,7 +351,7 @@ class Bridge:
 # ---------------------------------------------------------------------------------------------------- CLI
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--name", default=None, help="optional device-name filter in addition to the service UUID; default: service UUID only")
+    ap.add_argument("--name", default=None, help=f"BLE device name (config.BLE NAME = {B['NAME']!r})")
     ap.add_argument("--fake", action="store_true", help="simulated robot instead of Bluetooth")
     ap.add_argument("--sim", action="store_true", help="with --fake: publish the simulated balloon + person on 5007")
     ap.add_argument("--person", choices=["static", "walk", "route", "random", "real"], default="walk",

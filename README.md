@@ -43,11 +43,6 @@ Gondola link (Bluetooth LE): the gondola advertises as `BalloonRobot`. Windows B
 python -m laptop.control.ble_gondola      # scan, connect, bridge udp 5005/5006 <-> BLE. Leave it running (Ctrl+C = STOP)
 python -m laptop.control.teleop           # second terminal: SPACE arm, w/s a/d q/e j/l, k = kill. pilot / follow_me the same way
 ```
-For a minimal reference to control the master ESP32, run
-`python firmware/reference_control.py`. See the
-[firmware README](firmware/README.md#python-ble-control-reference)
-for commands and how to use this reference in the main control code.
-
 `http://127.0.0.1:5008/imu` (latest IMU sample), `/imu/history?n=200`, `/status` while the bridge runs; the same data in
 Python via `laptop.control.imu_store`. Motor letters, signs and the IMU layout are set once on the bench (section 3).
 Legacy WiFi firmware (`firmware/`, PlatformIO, `cd firmware && pio run`) still works: pass `--esp blimpy-xxxx.local`.
